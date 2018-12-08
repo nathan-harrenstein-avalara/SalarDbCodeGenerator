@@ -8,16 +8,16 @@
 			padding: 0;
 			margin: 0;
 		}
-		
+
 		body {
 			font-family: Verdana, Arial, Helvetica, sans-serif;
 			font-size: 13px;
 		}
-		
+
 		p {
 			padding: 10px;
 		}
-		
+
 		#wrapper {
 			margin: 0 auto;
 			width: 800px;
@@ -33,7 +33,7 @@
 			filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#85c8e7', endColorstr='#c6eaf4',GradientType=0 );
 			background: linear-gradient(top, #85c8e7 11%,#a0dcee 25%,#deeef2 95%,#c6eaf4 100%);
 		}
-		
+
 		#content {
 			float: left;
 			color: #333;
@@ -74,7 +74,7 @@
 			border-bottom-left-radius: 10px;
 			border-bottom-right-radius: 10px;
 		}
-		
+
 		#footer {
 			clear: both;
 			color: #333;
@@ -83,7 +83,7 @@
 			-webkit-box-shadow: inset 2px 2px 8px silver;
 			box-shadow: inset 2px 2px 8px silver;
 		}
-		
+
 		code, .code {
 			font-family: Courier New;
 			font-size: small;
@@ -100,7 +100,7 @@
 			border-radius: 5px;
 			overflow: auto;
 		}
-		
+
 		h1 {
 			font-size: large;
 			color: Navy;
@@ -114,11 +114,11 @@
 		h3,h4 {
 			padding-left: 10px;
 		}
-		
+
 		ul {
 			margin: 2px 20px;
 		}
-		
+
 		h1, h2, h3 {
 		}
 		.marker-blue {
@@ -176,7 +176,7 @@ CREATE TABLE  [Car](
 	[ModelName] [nvarchar](50) NOT NULL,
 	[ProductionYear] [int] NULL,
  CONSTRAINT [PK_Car] PRIMARY KEY (	[CarId] ASC)
-) ON [PRIMARY] 
+) ON [PRIMARY]
 GO
 
 ALTER TABLE [Car]  WITH CHECK ADD  CONSTRAINT [FK_Car_Person] FOREIGN KEY([PersonId])
@@ -226,7 +226,6 @@ public partial class Car : CodeGenSampleDBBaseEntity&lt;Car&gt;
 	[DataMember]
 	[Property(&quot;ProductionYear&quot;, NotNull = false, Length = 0)]
 	public virtual Int32? ProductionYear { get; set; }
-
 
 	/// &lt;summary&gt;
 	/// Person - PersonId
@@ -294,7 +293,7 @@ public partial class Person : CodeGenSampleDBBaseEntity&lt;Person&gt;
 	};
 person.Create();</pre>
 			<p>
-				Inserting records with foreign keys are simple too, just need to assign the 
+				Inserting records with foreign keys are simple too, just need to assign the
 				right property. Here person is associated to a car:</p>
 			<pre class="code">var car = new Car
 	{
@@ -319,7 +318,7 @@ person.Save();
 			<h3>
 				Reading</h3>
 			<p>
-				Readding data is simple too. There is several ways to read data from database, 
+				Readding data is simple too. There is several ways to read data from database,
 				here is a few samples.<br />
 				Here I assume that we only know the ID of the a person record:</p>
 				<pre class="code">// the id we already know
@@ -331,9 +330,9 @@ var p = Person.Find(personId);
 var thep = new Person { PersonId = personId };
 thep.Refresh();
 </pre>
-			<p><span class="marker-blue">Find</span> 
-			method always works with PrimaryKeys, so you need to know what 
-			column of your table is Key. Note that the <span class="marker-blue">Find</span> method throws exception if nothing found. You can use 
+			<p><span class="marker-blue">Find</span>
+			method always works with PrimaryKeys, so you need to know what
+			column of your table is Key. Note that the <span class="marker-blue">Find</span> method throws exception if nothing found. You can use
 			<span class="marker-blue">TryFind</span> method which doesn't throw exception if nothing found.</p>
 			<p>It is possible to use NHibernate queries:</p>
 			<pre class="code">p = Person.FindOne(Expression.Eq("FullName", "Salar Khalilzadeh"));</pre>
@@ -357,8 +356,8 @@ if (linqPerson != null)
 			<p>Also here is how to query relational tables:</p>
 			<pre class="code">var carQuery = ActiveRecordLinq.AsQueryable&lt;Car&gt;().Where(x =&gt; x.Person.FullName.Contains(&quot;Salar&quot;));</pre>
 			<h3>Update</h3>
-			<p>Updating is as easy as this code. Remember the entity used to 
-			call Update method should be already avilable with valid PrimaryKey 
+			<p>Updating is as easy as this code. Remember the entity used to
+			call Update method should be already avilable with valid PrimaryKey
 			value:</p>
 			<pre class="code">car.CarName = "Benz - Red";
 car.Update();
@@ -368,9 +367,9 @@ car.Update();
 			<pre class="code">car.Delete();
 </pre><h3>Save</h3>
 			<p>There is a method called <span class="marker-blue">Save</span>
-			with takes care of entity existance. It saves the object to 
-			database. Which means if the records already exists in database it 
-			updates the records, if it's new a new records will insert to 
+			with takes care of entity existance. It saves the object to
+			database. Which means if the records already exists in database it
+			updates the records, if it's new a new records will insert to
 			database.</p>
 
 			<h2>

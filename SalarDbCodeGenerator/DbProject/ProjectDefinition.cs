@@ -1,6 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Windows.Forms;
 using System.Xml.Serialization;
 
 // ====================================
@@ -12,102 +11,98 @@ using System.Xml.Serialization;
 // ====================================
 namespace SalarDbCodeGenerator.DbProject
 {
-	[Serializable]
-	public class ProjectDefinition : ICloneable
-	{
-		#region local variables
-		#endregion
+    [Serializable]
+    public class ProjectDefinition : ICloneable
+    {
+        #region properties
 
-		#region field variables
-		#endregion
+        private float _generatorVersion;
 
-		#region properties
+        public float GeneratorVersion
+        {
+            get { return _generatorVersion; }
+            set { /* nope! this doesn't change!*/ }
+        }
 
-		private float _generatorVersion;
-		public float GeneratorVersion
-		{
-			get { return _generatorVersion; }
-			set { /* nope! this doesn't change!*/ }
-		}
+        public string ProjectName { get; set; }
+        public DateTime LastGeneration { get; set; }
+        public string GenerationPath { get; set; }
+        public ProjectCodeGenSettings CodeGenSettings { get; set; }
+        public ProjectDbSettions DbSettions { get; set; }
+        public ProjectRenaming RenamingOptions { get; set; }
 
-		public string ProjectName { get; set; }
-		public DateTime LastGeneration { get; set; }
-		public string GenerationPath { get; set; }
-		public ProjectCodeGenSettings CodeGenSettings { get; set; }
-		public ProjectDbSettions DbSettions { get; set; }
-		public ProjectRenaming RenamingOptions { get; set; }
+        [NonSerialized]
+        public string ProjectFileName;
 
-		[NonSerialized]
-		public string ProjectFileName;
-		#endregion
+        #endregion properties
 
-		#region public methods
-		public ProjectDefinition()
-		{
-			ProjectName = "Project1";
-			LastGeneration = DateTime.MinValue;
-			GenerationPath = "";
-			DbSettions = new ProjectDbSettions();
-			CodeGenSettings = new ProjectCodeGenSettings();
-			RenamingOptions = new ProjectRenaming();
-			_generatorVersion = 2.1f;
-		}
+        #region public methods
 
-		public object Clone()
-		{
-			return this.MemberwiseClone();
-		}
+        public ProjectDefinition()
+        {
+            ProjectName = "Project1";
+            LastGeneration = DateTime.MinValue;
+            GenerationPath = "";
+            DbSettions = new ProjectDbSettions();
+            CodeGenSettings = new ProjectCodeGenSettings();
+            RenamingOptions = new ProjectRenaming();
+            _generatorVersion = 2.1f;
+        }
 
-		public static void SaveToFile(ProjectDefinition definaton, string fileName)
-		{
-			var genPath = definaton.GenerationPath;
-			var patPath = definaton.CodeGenSettings.CodeGenPatternFile;
-			try
-			{
-				// make relative
-				definaton.CodeGenSettings.CodeGenPatternFile =
-					Common.AppVarPathMakeRelative(definaton.CodeGenSettings.CodeGenPatternFile);
-				definaton.GenerationPath = Common.ProjectPathMakeRelative(definaton.GenerationPath, fileName);
+        public object Clone()
+        {
+            return this.MemberwiseClone();
+        }
 
-				// save
-				XmlSerializer saver = new XmlSerializer(typeof(ProjectDefinition));
-				using (StreamWriter writer = new StreamWriter(fileName))
-					saver.Serialize(writer, definaton);
+        public static void SaveToFile(ProjectDefinition definaton, string fileName)
+        {
+            var genPath = definaton.GenerationPath;
+            var patPath = definaton.CodeGenSettings.CodeGenPatternFile;
+            try {
+                // make relative
+                definaton.CodeGenSettings.CodeGenPatternFile =
+                    Common.AppVarPathMakeRelative(definaton.CodeGenSettings.CodeGenPatternFile);
+                definaton.GenerationPath = Common.ProjectPathMakeRelative(definaton.GenerationPath, fileName);
 
-			}
-			finally
-			{
-				// restore
-				definaton.CodeGenSettings.CodeGenPatternFile = patPath;
-				definaton.GenerationPath = genPath;
-			}
-		}
-		public static ProjectDefinition LoadFromFile(string fileName)
-		{
-			ProjectDefinition definaton;
-			XmlSerializer loader = new XmlSerializer(typeof(ProjectDefinition));
-			using (StreamReader reader = new StreamReader(fileName))
-				definaton = (ProjectDefinition)loader.Deserialize(reader);
+                // save
+                XmlSerializer saver = new XmlSerializer(typeof(ProjectDefinition));
+                using (StreamWriter writer = new StreamWriter(fileName))
+                    saver.Serialize(writer, definaton);
+            }
+            finally {
+                // restore
+                definaton.CodeGenSettings.CodeGenPatternFile = patPath;
+                definaton.GenerationPath = genPath;
+            }
+        }
 
-			definaton.ProjectFileName = fileName;
-			return definaton;
-		}
-		public static ProjectDefinition LoadDefaultProject()
-		{
-			ProjectDefinition result = new ProjectDefinition();
+        public static ProjectDefinition LoadFromFile(string fileName)
+        {
+            ProjectDefinition definaton;
+            XmlSerializer loader = new XmlSerializer(typeof(ProjectDefinition));
+            using (StreamReader reader = new StreamReader(fileName))
+                definaton = (ProjectDefinition)loader.Deserialize(reader);
 
-			result.ProjectName = "Project1";
-			result.LastGeneration = DateTime.MinValue;
-			result.GenerationPath = AppConfig.DefaultOutputPath;
-			result.ProjectFileName = "";
+            definaton.ProjectFileName = fileName;
+            return definaton;
+        }
 
-			result.DbSettions = ProjectDbSettions.LoadDefaultSettings();
-			result.CodeGenSettings = ProjectCodeGenSettings.LoadDefaultSettings();
-			result.CodeGenSettings.CodeGenPatternFile = AppConfig.DefaultPatternFileName;
+        public static ProjectDefinition LoadDefaultProject()
+        {
+            ProjectDefinition result = new ProjectDefinition();
 
-			return result;
-		}
+            result.ProjectName = "Project1";
+            result.LastGeneration = DateTime.MinValue;
+            result.GenerationPath = AppConfig.DefaultOutputPath;
+            result.ProjectFileName = "";
 
-		#endregion
-	}
+            result.DbSettions = ProjectDbSettions.LoadDefaultSettings();
+            result.CodeGenSettings = ProjectCodeGenSettings.LoadDefaultSettings();
+            result.CodeGenSettings.CodeGenPatternFile = AppConfig.DefaultPatternFileName;
+
+            return result;
+        }
+
+        #endregion public methods
+    }
 }

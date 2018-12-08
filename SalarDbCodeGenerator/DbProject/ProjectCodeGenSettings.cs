@@ -1,8 +1,5 @@
-﻿using System.Collections.Specialized;
-using System.IO;
-using System.Windows.Forms;
-using System;
-using System.Xml.Serialization;
+﻿using System;
+using System.Collections.Specialized;
 
 // ====================================
 // SalarDbCodeGenerator
@@ -13,52 +10,56 @@ using System.Xml.Serialization;
 // ====================================
 namespace SalarDbCodeGenerator.DbProject
 {
-	[Serializable]
-	public class ProjectCodeGenSettings
-	{
-		#region properties
-		public string DefaultNamespace { get; set; }
-		public bool GenerateCustomizablePartial { get; set; }
-		public string CodeGenPatternFile { get; set; }
+    [Serializable]
+    public class ProjectCodeGenSettings
+    {
+        #region properties
 
-		public StringCollection SelectedPatterns { get; set; }
+        public string DefaultNamespace { get; set; }
+        public bool GenerateCustomizablePartial { get; set; }
+        public string CodeGenPatternFile { get; set; }
 
-		/// <summary>
-		/// Determines if the engine should generate columns description, if is supported.
-		/// </summary>
-		public bool GenerateColumnsDescription { get; set; }
+        public StringCollection SelectedPatterns { get; set; }
 
-		/// <summary>
-		/// Determines if the engine should generate tables foreign keys, if is supported.
-		/// </summary>
-		public bool GenerateTablesForeignKeys { get; set; }
+        /// <summary>
+        /// Determines if the engine should generate columns description, if is supported.
+        /// </summary>
+        public bool GenerateColumnsDescription { get; set; }
 
-		/// <summary>
-		/// Determines if the engine should generate tables contraints keys, if supported.
-		/// </summary>
-		public bool GenerateConstraintKeys { get; set; }
-		#endregion
+        /// <summary>
+        /// Determines if the engine should generate tables foreign keys, if is supported.
+        /// </summary>
+        public bool GenerateTablesForeignKeys { get; set; }
 
-		#region public methods
-		public ProjectCodeGenSettings()
-		{
-			DefaultNamespace = "SalarDb.CodeGen";
-			GenerateColumnsDescription = true;
-			GenerateTablesForeignKeys = true;
-			GenerateConstraintKeys = true;
-			CodeGenPatternFile = "";
-			SelectedPatterns = new StringCollection();
-		}
-		public static ProjectCodeGenSettings LoadDefaultSettings()
-		{
-			ProjectCodeGenSettings settings = new ProjectCodeGenSettings();
+        /// <summary>
+        /// Determines if the engine should generate tables contraints keys, if supported.
+        /// </summary>
+        public bool GenerateConstraintKeys { get; set; }
 
-			settings.CodeGenPatternFile = AppConfig.AppVarApplicationPath + @"\Patterns\NHibernate MapByCode\NHibernate MapByCode.dbpat";
-			settings.DefaultNamespace = "SalarDb.CodeGen";
+        #endregion properties
 
-			return settings;
-		}
-		#endregion
+        #region public methods
 
-	}
+        public ProjectCodeGenSettings()
+        {
+            DefaultNamespace = "SalarDb.CodeGen";
+            GenerateColumnsDescription = true;
+            GenerateTablesForeignKeys = true;
+            GenerateConstraintKeys = true;
+            CodeGenPatternFile = "";
+            SelectedPatterns = new StringCollection();
+        }
+
+        public static ProjectCodeGenSettings LoadDefaultSettings()
+        {
+            ProjectCodeGenSettings settings = new ProjectCodeGenSettings();
+
+            settings.CodeGenPatternFile = AppConfig.AppVarApplicationPath + @"\Patterns\NHibernate MapByCode\NHibernate MapByCode.dbpat";
+            settings.DefaultNamespace = "SalarDb.CodeGen";
+
+            return settings;
+        }
+
+        #endregion public methods
+    }
 }

@@ -1,15 +1,6 @@
 ﻿#if ORACLE
 using Oracle.ManagedDataAccess.Client;
 #endif
-using SalarDbCodeGenerator.DbProject;
-using SalarDbCodeGenerator.Schema.Database;
-using System;
-using System.Collections.Generic;
-using System.Collections.Specialized;
-using System.Data;
-using System.Data.Common;
-using System.Linq;
-using System.Text.RegularExpressions;
 
 // ====================================
 // SalarDbCodeGenerator
@@ -33,11 +24,14 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
             Oracle11gAbove
         }
 
-        #region local variables
-        private OracleConnection _dbConnection;
-        #endregion
+    #region local variables
 
-        #region public methods
+        private OracleConnection _dbConnection;
+
+    #endregion local variables
+
+    #region public methods
+
         public OracleSchemaEngine(DbConnection dbConnection)
         {
             _dbConnection = (OracleConnection)dbConnection;
@@ -69,24 +63,34 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
             switch (providerClassName) {
                 case DataProviderClassNames.ClassPrefix:
                     return "Oracle";
+
                 case DataProviderClassNames.ClassCommand:
                     return "OracleCommand";
+
                 case DataProviderClassNames.ClassConnection:
                     return "OracleConnection";
+
                 case DataProviderClassNames.ClassDataAdapter:
                     return "OracleDataAdapter";
+
                 case DataProviderClassNames.ClassDataReader:
                     return "OracleDataReader";
+
                 case DataProviderClassNames.ClassParameter:
                     return "OracleParameter";
+
                 case DataProviderClassNames.ClassTransaction:
                     return "OracleTransaction";
+
                 case DataProviderClassNames.ClassNamespace:
                     return "Oracle.DataAccess.Client";
+
                 case DataProviderClassNames.AssemblyReference:
                     return "Oracle.DataAccess";
+
                 case DataProviderClassNames.StoredProcParamPrefix:
                     return ":";
+
                 default:
                     return "";
             }
@@ -99,9 +103,9 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
             _dbConnection = null;
         }
 
-        #endregion
+    #endregion public methods
 
-        #region protected methods
+    #region protected methods
 
         private DataTable _cache_IndexColumns;
         private DataTable Cache_IndexColumns
@@ -134,7 +138,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
                 return _cache_Indexes;
             }
         }
-
 
         private DataTable _cache_ForeignKeys;
         private DataTable Cache_ForeignKeys
@@ -193,9 +196,11 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
         private const string STR_ConstraintType_Unique = "U";
         private const string STR_ConstraintType_Primarykey = "P";
         private const string STR_ConstraintType_ForeignKey = "R";
-        #endregion
 
-        #region private methods
+    #endregion protected methods
+
+    #region private methods
+
         /// <summary>
         /// Reads tables list. This method requires views list to prevent from conflict!
         /// </summary>
@@ -318,7 +323,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
             return result;
         }
 
-
         /// <summary>
         /// Only oracle allows case sensitive table names!
         /// </summary>
@@ -400,7 +404,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
         {
             List<DbColumn> result = new List<DbColumn>();
 
-
             string[] restrictions = null;
             if (!string.IsNullOrWhiteSpace(this.SpecificOwner)) {
                 restrictions = new string[]
@@ -412,7 +415,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
 
             // Used to get columns Sql DataType
             using (DataTable columnsDbTypeTable = _dbConnection.GetSchema("COLUMNS", restrictions)) {
-
                 // Fetch the rows
                 foreach (DataRow dr in columnsDbTypeTable.Rows) {
                     string columnName = dr["COLUMN_NAME"].ToString();
@@ -574,7 +576,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
                     continue;
 
                 if (foreignKeyTable != null) {
-
                     // foreign key many end
                     var oneMultiplicityKey = new DbForeignKey()
                     {
@@ -619,7 +620,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
                 }
 
                 if (primaryKeyTable != null) {
-
                     // foreign key many end
                     var manyMultiplicityKey = new DbForeignKey()
                     {
@@ -664,7 +664,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
                 }
             }
         }
-
 
         /// <summary>
         /// Applies the sequence name for each primary key in the tables
@@ -746,7 +745,6 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
                     }
                 }
         }
-
 
         /// <summary>
         /// Removes duplicate table constraints, PK > UK > IX
@@ -1086,7 +1084,8 @@ namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
             } else
                 return OracleServerVersions.Oracle8iBelow;
         }
-        #endregion
+
+    #endregion private methods
     }
 #endif
 }

@@ -1,12 +1,12 @@
-﻿using System;
+﻿using SalarDbCodeGenerator.DbProject;
+using SalarDbCodeGenerator.Schema.Database;
+using SalarDbCodeGenerator.Schema.DbSchemaReaders;
+using SalarDbCodeGenerator.Schema.Patterns;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using SalarDbCodeGenerator.DbProject;
-using SalarDbCodeGenerator.Schema.Database;
-using SalarDbCodeGenerator.Schema.DbSchemaReaders;
-using SalarDbCodeGenerator.Schema.Patterns;
 
 // ====================================
 // SalarDbCodeGenerator
@@ -17,759 +17,708 @@ using SalarDbCodeGenerator.Schema.Patterns;
 // ====================================
 namespace SalarDbCodeGenerator.GeneratorEngine
 {
-	public class Generator
-	{
-		/// <summary>
-		/// Where will pattern file apply
-		/// </summary>
-		private enum PatternFileWhereToApply { Both, Tables, Views, None }
-
-		#region local variables
-		PatternProject _patternProject;
-		ProjectDefinition _projectDef;
-		DbDatabase _database;
-		ExSchemaEngine _schemaEngine;
-		bool _optionGenerateUnselectedForeigns;
-		private string _databaseName;
-		#endregion
-
-		public Generator(ProjectDefinition project, PatternProject pattern, DbDatabase database, ExSchemaEngine schemaEngine)
-		{
-			_patternProject = pattern;
-			_projectDef = project;
-			_database = database;
-			_schemaEngine = schemaEngine;
-			_optionGenerateUnselectedForeigns = false;
-
-			var fc = _projectDef.DbSettions.DatabaseName[0];
-			var fother = _projectDef.DbSettions.DatabaseName.Substring(1, _projectDef.DbSettions.DatabaseName.Length - 1);
-			_databaseName = fc.ToString(CultureInfo.InvariantCulture).ToUpper() + fother;
-		}
-
-		#region public methods
-		/// <summary>
-		/// Let the engine start
-		/// </summary>
-		public void Generate()
-		{
-			string patternsFolder = Path.GetDirectoryName(
-				Common.AppVarPathMakeAbsolute(_projectDef.CodeGenSettings.CodeGenPatternFile));
-
-			// arrays! don't remember why I did this and too lazy to check! :)
-			var schemaTables = (from t in _database.SchemaTables orderby t.TableName select t).ToArray();
-			var schemaViews = (from v in _database.SchemaViews orderby v.TableName select v).ToArray();
-
-			// all the pattern files
-			_patternProject.PatternFiles.ForEach(
-				patFile =>
-				{
-					// Pattern filename can change based on the selected DataProider
-					var patternFilePath = Replacer_DatabaseProvider(patFile.Path);
-					var patternFileAddress = Path.Combine(patternsFolder, patternFilePath);
-
-					// Copy action requested
-					if (patFile.Action == PatternsListItemAction.Copy)
-					{
-						var fileName = Path.GetFileName(patternFilePath);
-						// Check if pattern is selected by user
-						if (!_projectDef.CodeGenSettings.SelectedPatterns.Contains(fileName))
-						{
-							return;
-						}
-
-						var copyPath = _projectDef.GenerationPath;
-						var copyPathDir = Common.ProjectPathMakeAbsolute(copyPath, _projectDef.ProjectFileName);
-
-						if (!string.IsNullOrEmpty(patFile.ActionCopyPath))
-						{
-							var actionCopyPath = Replacer_DatabaseProvider(patFile.ActionCopyPath);
-
-							copyPath = Path.Combine(copyPathDir, actionCopyPath);
-							copyPathDir = Path.GetDirectoryName(copyPath);
-						}
-
-						try
-						{
-							Directory.CreateDirectory(copyPathDir);
-							File.Copy(patternFileAddress, copyPath, true);
-						}
-						catch (Exception)
-						{
-							// TODO: log failed
-						}
-						return;
-					}
-
-
-					// load the pattern file
-					var patternFile = PatternFile.ReadFromFile(patternFileAddress);
-
-
-					// Check if pattern is selected by user
-					if (!_projectDef.CodeGenSettings.SelectedPatterns.Contains(patternFile.Name))
-					{
-						//continue;
-						return;
-					}
-
-					switch (patternFile.Options.AppliesTo)
-					{
-						case PatternFileAppliesTo.General:
-							PatternFileAppliesTo_GeneralApplier(patternFile);
-							break;
-
-						case PatternFileAppliesTo.TablesAndViewsEach:
-							PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
-																	   PatternFileWhereToApply.Both,
-																	   patternFile);
-							break;
-
-						case PatternFileAppliesTo.TablesAndViewsAll:
-							PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
-																	   PatternFileWhereToApply.None,
-																	   patternFile);
-							break;
-
-						case PatternFileAppliesTo.TablesEach:
-						case PatternFileAppliesTo.TablesAll:
-							PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
-																	   PatternFileWhereToApply.Tables,
-																	   patternFile);
-							break;
-
-						case PatternFileAppliesTo.ViewsEach:
-						case PatternFileAppliesTo.ViewsAll:
-							PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
-																	   PatternFileWhereToApply.Views,
-																	   patternFile);
-							break;
-
-						case PatternFileAppliesTo.ProjectFile:
-							// only for project files
-							PatternFileAppliesTo_ProjectFileApplier(patternFile);
-							break;
-					}
-				});
-
-		}
-		#endregion
-
-
-		#region PatternFileAppliesTo
-		/// <summary>
-		/// Checking to see if user has selected this table to be generated
-		/// </summary>
-		private bool UserHasSelectedTable(string tableName)
-		{
-			return _projectDef.DbSettions.IsTableSelected(tableName);
-		}
-
-		/// <summary>
-		/// Checking to see if user has selected this view to be generated
-		/// </summary>
-		private bool UserHasSelectedView(string viewName)
-		{
-			return _projectDef.DbSettions.IsViewSelected(viewName);
-		}
-
-		/// <summary>
-		/// Pattern file - AppliesTo - TablesAndViews
-		/// </summary>
-		private void PatternFileAppliesTo_TablesAndViewsApplier(DbTable[] tablesList,
-			DbTable[] viewsList,
-			PatternFileWhereToApply whatListToUse,
-			PatternFile patternFile)
-		{
-			if (patternFile.IsAllToOne)
-			{
-				var genPath = _projectDef.GenerationPath;
-				genPath = Common.ProjectPathMakeAbsolute(genPath, _projectDef.ProjectFileName);
-
-				// the destination filename
-				string fileName = Replacer_PatternFileName(patternFile.Options.FilePath, null, null, null);
-				fileName = Path.Combine(genPath, fileName);
-
-				// don't overwrite if exists and overwriting is not requested
-				if (patternFile.Options.Overwrite == false && File.Exists(fileName))
-					return;
-
-				// create directory
-				Directory.CreateDirectory(Path.GetDirectoryName(fileName));
-
-				// generated file content
-				string genContent = patternFile.BaseContent;
-
-				// BaseContent Replacements
-				genContent = Replacer_PatternBaseContent(genContent, null, null);
-
-				// for each pattern content
-				genContent = PatternContentAppliesTo_TablesAndViews(genContent,
-					patternFile.PatternContents,
-					tablesList,
-					viewsList);
-
-				// all is done! Write to file
-				File.WriteAllText(fileName, genContent);
-			}
-			else
-			{
-				// combine the list
-				var tablesAndViews = new List<DbTable>();
-				if (whatListToUse == PatternFileWhereToApply.Both ||
-					whatListToUse == PatternFileWhereToApply.Tables)
-					tablesAndViews.AddRange(tablesList);
-				if (whatListToUse == PatternFileWhereToApply.Both ||
-					whatListToUse == PatternFileWhereToApply.Views)
-					tablesAndViews.AddRange(viewsList);
-
-				// surf in the tables/views
-				tablesAndViews.ForEach(table =>
-				{
-					if (table.TableType == DbTable.TableTypeInfo.Table)
-					{
-						// check if selected by user
-						if (!UserHasSelectedTable(table.TableName))
-							//continue;
-							return;
-					}
-					else if (table.TableType == DbTable.TableTypeInfo.View)
-					{
-						// check if selected by user
-						if (!UserHasSelectedView(table.TableName))
-							//continue;
-							return;
-					}
-					else
-					{
-						// What?! Invalid table type!
-						return;
-					}
-
-					var genPath = _projectDef.GenerationPath;
-					genPath = Common.ProjectPathMakeAbsolute(genPath, _projectDef.ProjectFileName);
-
-					// the destination filename
-					string fileName = Replacer_PatternFileName(patternFile.Options.FilePath,
-										  table.TableNameSchema,
-										  table.TableName,
-										  table.TableNameSchemaCS);
-					fileName = Path.Combine(genPath, fileName);
-
-					// don't overwrite if exists an overwriting is not requested
-					if (patternFile.Options.Overwrite == false && File.Exists(fileName))
-						//continue;
-						return;
-
-					// create directory
-					Directory.CreateDirectory(Path.GetDirectoryName(fileName));
-
-					// generated file content
-					string genContent = patternFile.BaseContent;
-
-					// BaseContent Replacements
-					genContent = Replacer_PatternBaseContent(genContent,
-										  table.TableNameSchema,
-										  table.TableName);
-
-					// for each pattern content
-					genContent = PatternContentAppliesTo_OneTable(
-						genContent,
-						patternFile.PatternContents,
-						table,
-						null,
-						null);
-
-					// all is done! Write to file
-					File.WriteAllText(fileName, genContent);
-				});
-			}
-		}
-
-		/// <summary>
-		/// Starts to apply general replacements to the pattern
-		/// </summary>
-		private void PatternFileAppliesTo_GeneralApplier(PatternFile patternFile)
-		{
-			string fileName = patternFile.Options.FilePath;
-
-			var generationPath = _projectDef.GenerationPath;
-			generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
-
-			// the general replacements
-			fileName = Replacer_GeneratorGeneral(fileName);
-
-			// the destination path
-			fileName = Path.Combine(generationPath, fileName);
-
-			// create directory
-			Directory.CreateDirectory(Path.GetDirectoryName(fileName));
-
-			// don't overwrite if exists an overwriting is not requested
-			if (patternFile.Options.Overwrite == false && File.Exists(fileName))
-				return;
-
-			// generated file content
-			string genContent = patternFile.BaseContent;
-
-			// general
-			genContent = Replacer_GeneratorGeneral(genContent);
-
-			// database provider
-			genContent = Replacer_DatabaseProvider(genContent);
-
-			// search for pattern in the general content
-			foreach (PatternContent pattern in patternFile.PatternContents)
-			{
-				string partialName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
-
-				// is there a pattern for that
-				if (genContent.IndexOf(partialName) == -1)
-					continue;
-
-				if (pattern.ConditionKeyMode == PatternConditionKeyMode.General ||
-				   pattern.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider)
-				{
-					string contentToReplace = PatternContentAppliesTo_General(pattern);
-
-					genContent = genContent.Replace(partialName, contentToReplace);
-				}
-			}
-
-			// Write to file
-			File.WriteAllText(fileName, genContent);
-		}
-
-		/// <summary>
-		/// Starts to apply project files to the pattern
-		/// </summary>
-		private void PatternFileAppliesTo_ProjectFileApplier(PatternFile commonPattern)
-		{
-			var generationPath = _projectDef.GenerationPath;
-			generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
-
-			string fileName = Common.ReplaceEx(commonPattern.Options.FilePath, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
-			fileName = Path.Combine(generationPath, fileName);
-
-			// don't overwrite if exists an overwriting is not requested
-			if (commonPattern.Options.Overwrite == false && File.Exists(fileName))
-				return;
-
-			// create directory
-			Directory.CreateDirectory(Path.GetDirectoryName(fileName));
-
-			// generated file content
-			string genContent = commonPattern.BaseContent;
-
-			// general
-			genContent = Replacer_GeneratorGeneral(genContent);
-
-			// database provider class
-			genContent = Replacer_DatabaseProvider(genContent);
-
-			// Replacements
-			genContent = Common.ReplaceEx(genContent, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
-
-
-			// search for pattern in the general content
-			foreach (PatternContent pattern in commonPattern.PatternContents)
-			{
-				string partialName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
-
-				// is there a pattern for that
-				if (genContent.IndexOf(partialName) == -1)
-					continue;
-
-				if (pattern.ConditionKeyMode == PatternConditionKeyMode.ProjectFiles)
-				{
-					// Get project generated files, extnsion is specfied by the project
-					string codeFilePattern = String.Format("*{0}", _patternProject.FileExtension);
-
-					// Search the files
-					string[] projectFiles = Directory.GetFiles(generationPath, codeFilePattern, SearchOption.AllDirectories);
-
-					string contentToReplace = "";
-					foreach (var projectFile in projectFiles)
-					{
-						string columnReplace = PatternContentAppliesTo_ProjectFiles(pattern, projectFile);
-
-						if (!string.IsNullOrEmpty(columnReplace))
-							contentToReplace += columnReplace + pattern.ItemsSeperator;
-					}
-
-					// removing unnecessary ItemsSeperator
-					if (!string.IsNullOrEmpty(pattern.ItemsSeperator) && contentToReplace.EndsWith(pattern.ItemsSeperator))
-						contentToReplace = contentToReplace.Remove(contentToReplace.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
-
-					// replace
-					genContent = genContent.Replace(partialName, contentToReplace);
-				}
-				else if (pattern.ConditionKeyMode == PatternConditionKeyMode.General ||
-					pattern.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider)
-				{
-					string contentToReplace = PatternContentAppliesTo_General(pattern);
-
-					genContent = genContent.Replace(partialName, contentToReplace);
-				}
-			}
-
-			// Write to file
-			File.WriteAllText(fileName, genContent);
-		}
-
-		#endregion
-
-		#region  PatternContentAppliesTo
-
-		/// <summary>
-		/// Partial content replacer.
-		/// </summary>
-		string PatternContentAppliesTo_ProjectFiles(PatternContent partialContent, string fileNamePath)
-		{
-			var oneReplacer = partialContent.GetFirst();
-			return Replacer_ConditionItem_ProjectFile(oneReplacer.ContentText, fileNamePath);
-		}
-
-		/// <summary>
-		/// Partial content replacer.
-		/// </summary>
-		string PatternContentAppliesTo_General(PatternContent partialContent)
-		{
-			if (partialContent.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider)
-			{
-				ConditionItem dbReplacer = null;
-				switch (this._database.Provider)
-				{
-					case DatabaseProvider.Oracle:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
-						break;
-
-					case DatabaseProvider.SQLServer:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
-						break;
-
-					case DatabaseProvider.SQLite:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
-						break;
-
-					case DatabaseProvider.SqlCe4:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
-						break;
-					case DatabaseProvider.Npgsql:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Npgsql);
-						break;
-					case DatabaseProvider.MySql:
-						dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.MySql);
-						break;
-				}
-
-
-				if (dbReplacer != null)
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
-
-			}
-			else if (partialContent.ConditionKeyMode == PatternConditionKeyMode.General)
-			{
-				var dbReplacer = partialContent.GetFirst();
-				if (dbReplacer != null)
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
-			}
-
-			return "";
-		}
-
-		/// <summary>
-		/// One table, one column or one foreignKey in table!
-		/// </summary>
-		string PatternContentAppliesTo_OneTable(string baseContent,
-			List<PatternContent> patternContent,
-			DbTable table,
-			DbColumn column,
-			DbForeignKey foreignKey)
-		{
-			string appliedContent = "";
-
-			// ---------------------------------
-			// Only one table is applying here!
-
-			// table can not be null here
-			if (table == null)
-			{
-				return baseContent;
-			}
-
-			foreach (var pattern in patternContent)
-			{
-				string replacementName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
-
-				// is there a pattern for that
-				if (baseContent.IndexOf(replacementName) == -1)
-					continue;
-
-				switch (pattern.ConditionKeyMode)
-				{
-					case PatternConditionKeyMode.General:
-						// nothing!
-						break;
-
-					case PatternConditionKeyMode.DatabaseProvider:
-						appliedContent = PatternContentAppliesTo_General(pattern);
-						
-						// base content
-						if (!string.IsNullOrEmpty(pattern.BaseContent))
-						{
-							appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
-						}
-
-						// internal pattern contents
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
-
-						// replace the content
-						baseContent = baseContent.Replace(replacementName, appliedContent);
-
-						break;
-
-					case PatternConditionKeyMode.TablesAll:
-					case PatternConditionKeyMode.ViewsAll:
-					case PatternConditionKeyMode.TablesAndViewsAll:
-						// for one table? Meh, we do nothing!
-						break;
-
-					case PatternConditionKeyMode.TableAutoIncrement:
-					case PatternConditionKeyMode.TableIndexConstraint:
-					case PatternConditionKeyMode.TablePrimaryKey:
-					case PatternConditionKeyMode.TableUniqueConstraint:
-						appliedContent = ConditionItem_AppliesToTable(pattern, table);
-
-						// base content
-						if (!string.IsNullOrEmpty(pattern.BaseContent))
-						{
-							appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
-						}
-
-						// internal pattern contents
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
-
-						// replace the content
-						baseContent = baseContent.Replace(replacementName, appliedContent);
-						break;
-
-
-					case PatternConditionKeyMode.Field:
-					case PatternConditionKeyMode.FieldCondensedType:
-					case PatternConditionKeyMode.FieldKeyReadType:
-					case PatternConditionKeyMode.FieldKeyType:
-					case PatternConditionKeyMode.FieldPrimaryKey:
-					case PatternConditionKeyMode.FieldReferencedKeyType:
-						appliedContent = "";
-
-						// no special column is specified
-						if (column == null)
-						{
-							// replace in the main content
-							baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
-						}
-						else
-						{
-							// Apply the replacement to the pattern content
-							string columnReplace = ConditionItem_AppliesToColumn(pattern, table, column);
-
-							// The seperator
-							if (!string.IsNullOrEmpty(columnReplace))
-							{
-								// internal pattern contents
-								// FOR EACH column
-								if (pattern.ConditionContents.Count > 0)
-								{
-									// nested call
-									columnReplace = PatternContentAppliesTo_OneTable(
-										columnReplace,
-										pattern.ConditionContents,
-										table,
-										column,
-										null);
-								}
-								appliedContent += columnReplace + pattern.ItemsSeperator;
-							}
-						}
-
-
-						// Remove additional ItemsSeperator
-						if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
-							&& appliedContent.EndsWith(pattern.ItemsSeperator))
-							appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
-
-						// internal pattern contents
-						// FOR EACH column
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
-
-						// replace in the main content
-						baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
-						break;
-
-                    case PatternConditionKeyMode.FieldsAll:
-					case PatternConditionKeyMode.FieldsCondensedTypeAll:
-					case PatternConditionKeyMode.FieldsKeyReadTypeAll:
-					case PatternConditionKeyMode.FieldsKeyTypeAll:
-					case PatternConditionKeyMode.FieldsPrimaryKeyAll:
-					case PatternConditionKeyMode.FieldsReferencedKeyTypeAll:
-						appliedContent = "";
-
-						// fetch the columns and apply the replacement operation
-						foreach (var tableColumn in table.SchemaColumns)
-						{
-							// Apply the replacement to the pattern content
-							string columnReplace = ConditionItem_AppliesToColumn(pattern, table, tableColumn);
-
-							// The seperator
-							if (!string.IsNullOrEmpty(columnReplace))
-							{
-								// internal pattern contents
-								// FOR EACH column
-								if (pattern.ConditionContents.Count > 0)
-								{
-									// nested call
-									columnReplace = PatternContentAppliesTo_OneTable(
-										columnReplace,
-										pattern.ConditionContents,
-										table,
-										tableColumn, null);
-								}
-								appliedContent += columnReplace + pattern.ItemsSeperator;
-							}
-						}
-
-						// Remove additional ItemsSeperator
-						if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
-							&& appliedContent.EndsWith(pattern.ItemsSeperator))
-							appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
-
-						// internal pattern contents
-						// FOR EACH column
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
-
-						// replace in the main content
-						baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
-						break;
-
-					case PatternConditionKeyMode.ForeignKeyDeleteAction:
-					case PatternConditionKeyMode.ForeignKeyUpdateAction:
-					case PatternConditionKeyMode.FieldForeignKeyLocalColumn:
-					case PatternConditionKeyMode.FieldForeignKeyForeignColumn:
-						appliedContent = "";
-
-						if (foreignKey == null)
-						{
-							// replace in the main content
-							baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
-						}
-						else
-						{
-							// Apply the replacement to the pattern content
-							string columnReplace = ConditionItem_AppliesToForeignKeyColumns(pattern, table, foreignKey);
-
-							// The seperator
-							if (!string.IsNullOrEmpty(columnReplace))
-							{
-								// internal pattern contents
-								if (pattern.ConditionContents.Count > 0)
-								{
-									// nested call
-									columnReplace = PatternContentAppliesTo_OneTable(
-										columnReplace,
-										pattern.ConditionContents,
-										table,
-										null,
-										foreignKey);
-								}
-
-								appliedContent += columnReplace + pattern.ItemsSeperator;
-							}
-						}
-
-						// Remove additional ItemsSeperator
-						if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
-							&& appliedContent.EndsWith(pattern.ItemsSeperator))
-							appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
-
-						// internal pattern contents
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
-
-						// replace in the main content
-						baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
-						break;
-
-					case PatternConditionKeyMode.FieldsForeignKeyAll:
-					case PatternConditionKeyMode.TableForeignKey:
-						appliedContent = "";
-
-
-						// fetch the columns and apply the replacement operation
-						foreach (var dbForeignKey in table.ForeignKeys)
-						{
-							// Apply the replacement to the pattern content
-							string columnReplace = ConditionItem_AppliesToForeignKeyColumns(pattern, table, dbForeignKey);
-
-							// The seperator
-							if (!string.IsNullOrEmpty(columnReplace))
-							{
-								// internal pattern contents
-								if (pattern.ConditionContents.Count > 0)
-								{
-									// nested call
-									columnReplace = PatternContentAppliesTo_OneTable(
-										columnReplace,
-										pattern.ConditionContents,
-										table,
-										null,
-										dbForeignKey);
-								}
-
-								appliedContent += columnReplace + pattern.ItemsSeperator;
-							}
-						}
-
-						// Remove additional ItemsSeperator
-						if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
-							&& appliedContent.EndsWith(pattern.ItemsSeperator))
-							appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
-
-						// internal pattern contents
-						if (pattern.ConditionContents.Count > 0)
-						{
-							// nested call
-							appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
-						}
+    public class Generator
+    {
+        /// <summary>
+        /// Where will pattern file apply
+        /// </summary>
+        private enum PatternFileWhereToApply { Both, Tables, Views, None }
+
+        #region local variables
+
+        private PatternProject _patternProject;
+        private ProjectDefinition _projectDef;
+        private DbDatabase _database;
+        private ExSchemaEngine _schemaEngine;
+        private bool _optionGenerateUnselectedForeigns;
+        private string _databaseName;
+
+        #endregion local variables
+
+        public Generator(ProjectDefinition project, PatternProject pattern, DbDatabase database, ExSchemaEngine schemaEngine)
+        {
+            _patternProject = pattern;
+            _projectDef = project;
+            _database = database;
+            _schemaEngine = schemaEngine;
+            _optionGenerateUnselectedForeigns = false;
+
+            var fc = _projectDef.DbSettions.DatabaseName[0];
+            var fother = _projectDef.DbSettions.DatabaseName.Substring(1, _projectDef.DbSettions.DatabaseName.Length - 1);
+            _databaseName = fc.ToString(CultureInfo.InvariantCulture).ToUpper() + fother;
+        }
+
+        #region public methods
+
+        /// <summary>
+        /// Let the engine start
+        /// </summary>
+        public void Generate()
+        {
+            string patternsFolder = Path.GetDirectoryName(
+                Common.AppVarPathMakeAbsolute(_projectDef.CodeGenSettings.CodeGenPatternFile));
+
+            // arrays! don't remember why I did this and too lazy to check! :)
+            var schemaTables = (from t in _database.SchemaTables orderby t.TableName select t).ToArray();
+            var schemaViews = (from v in _database.SchemaViews orderby v.TableName select v).ToArray();
+
+            // all the pattern files
+            _patternProject.PatternFiles.ForEach(
+                patFile => {
+                    // Pattern filename can change based on the selected DataProider
+                    var patternFilePath = Replacer_DatabaseProvider(patFile.Path);
+                    var patternFileAddress = Path.Combine(patternsFolder, patternFilePath);
+
+                    // Copy action requested
+                    if (patFile.Action == PatternsListItemAction.Copy) {
+                        var fileName = Path.GetFileName(patternFilePath);
+                        // Check if pattern is selected by user
+                        if (!_projectDef.CodeGenSettings.SelectedPatterns.Contains(fileName)) {
+                            return;
+                        }
+
+                        var copyPath = _projectDef.GenerationPath;
+                        var copyPathDir = Common.ProjectPathMakeAbsolute(copyPath, _projectDef.ProjectFileName);
+
+                        if (!string.IsNullOrEmpty(patFile.ActionCopyPath)) {
+                            var actionCopyPath = Replacer_DatabaseProvider(patFile.ActionCopyPath);
+
+                            copyPath = Path.Combine(copyPathDir, actionCopyPath);
+                            copyPathDir = Path.GetDirectoryName(copyPath);
+                        }
+
+                        try {
+                            Directory.CreateDirectory(copyPathDir);
+                            File.Copy(patternFileAddress, copyPath, true);
+                        }
+                        catch (Exception) {
+                            // TODO: log failed
+                        }
+                        return;
+                    }
+
+                    // load the pattern file
+                    var patternFile = PatternFile.ReadFromFile(patternFileAddress);
+
+                    // Check if pattern is selected by user
+                    if (!_projectDef.CodeGenSettings.SelectedPatterns.Contains(patternFile.Name)) {
+                        //continue;
+                        return;
+                    }
+
+                    switch (patternFile.Options.AppliesTo) {
+                        case PatternFileAppliesTo.General:
+                            PatternFileAppliesTo_GeneralApplier(patternFile);
+                            break;
+
+                        case PatternFileAppliesTo.TablesAndViewsEach:
+                            PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
+                                                                       PatternFileWhereToApply.Both,
+                                                                       patternFile);
+                            break;
+
+                        case PatternFileAppliesTo.TablesAndViewsAll:
+                            PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
+                                                                       PatternFileWhereToApply.None,
+                                                                       patternFile);
+                            break;
+
+                        case PatternFileAppliesTo.TablesEach:
+                        case PatternFileAppliesTo.TablesAll:
+                            PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
+                                                                       PatternFileWhereToApply.Tables,
+                                                                       patternFile);
+                            break;
+
+                        case PatternFileAppliesTo.ViewsEach:
+                        case PatternFileAppliesTo.ViewsAll:
+                            PatternFileAppliesTo_TablesAndViewsApplier(schemaTables, schemaViews,
+                                                                       PatternFileWhereToApply.Views,
+                                                                       patternFile);
+                            break;
+
+                        case PatternFileAppliesTo.ProjectFile:
+                            // only for project files
+                            PatternFileAppliesTo_ProjectFileApplier(patternFile);
+                            break;
+                    }
+                });
+        }
+
+        #endregion public methods
+
+        #region PatternFileAppliesTo
+
+        /// <summary>
+        /// Checking to see if user has selected this table to be generated
+        /// </summary>
+        private bool UserHasSelectedTable(string tableName)
+        {
+            return _projectDef.DbSettions.IsTableSelected(tableName);
+        }
+
+        /// <summary>
+        /// Checking to see if user has selected this view to be generated
+        /// </summary>
+        private bool UserHasSelectedView(string viewName)
+        {
+            return _projectDef.DbSettions.IsViewSelected(viewName);
+        }
+
+        /// <summary>
+        /// Pattern file - AppliesTo - TablesAndViews
+        /// </summary>
+        private void PatternFileAppliesTo_TablesAndViewsApplier(DbTable[] tablesList,
+            DbTable[] viewsList,
+            PatternFileWhereToApply whatListToUse,
+            PatternFile patternFile)
+        {
+            if (patternFile.IsAllToOne) {
+                var genPath = _projectDef.GenerationPath;
+                genPath = Common.ProjectPathMakeAbsolute(genPath, _projectDef.ProjectFileName);
+
+                // the destination filename
+                string fileName = Replacer_PatternFileName(patternFile.Options.FilePath, null, null, null);
+                fileName = Path.Combine(genPath, fileName);
+
+                // don't overwrite if exists and overwriting is not requested
+                if (patternFile.Options.Overwrite == false && File.Exists(fileName))
+                    return;
+
+                // create directory
+                Directory.CreateDirectory(Path.GetDirectoryName(fileName));
+
+                // generated file content
+                string genContent = patternFile.BaseContent;
+
+                // BaseContent Replacements
+                genContent = Replacer_PatternBaseContent(genContent, null, null);
+
+                // for each pattern content
+                genContent = PatternContentAppliesTo_TablesAndViews(genContent,
+                    patternFile.PatternContents,
+                    tablesList,
+                    viewsList);
+
+                // all is done! Write to file
+                File.WriteAllText(fileName, genContent);
+            }
+            else {
+                // combine the list
+                var tablesAndViews = new List<DbTable>();
+                if (whatListToUse == PatternFileWhereToApply.Both ||
+                    whatListToUse == PatternFileWhereToApply.Tables)
+                    tablesAndViews.AddRange(tablesList);
+                if (whatListToUse == PatternFileWhereToApply.Both ||
+                    whatListToUse == PatternFileWhereToApply.Views)
+                    tablesAndViews.AddRange(viewsList);
+
+                // surf in the tables/views
+                tablesAndViews.ForEach(table => {
+                    if (table.TableType == DbTable.TableTypeInfo.Table) {
+                        // check if selected by user
+                        if (!UserHasSelectedTable(table.TableName))
+                            //continue;
+                            return;
+                    }
+                    else if (table.TableType == DbTable.TableTypeInfo.View) {
+                        // check if selected by user
+                        if (!UserHasSelectedView(table.TableName))
+                            //continue;
+                            return;
+                    }
+                    else {
+                        // What?! Invalid table type!
+                        return;
+                    }
+
+                    var genPath = _projectDef.GenerationPath;
+                    genPath = Common.ProjectPathMakeAbsolute(genPath, _projectDef.ProjectFileName);
+
+                    // the destination filename
+                    string fileName = Replacer_PatternFileName(patternFile.Options.FilePath,
+                                          table.TableNameSchema,
+                                          table.TableName,
+                                          table.TableNameSchemaCS);
+                    fileName = Path.Combine(genPath, fileName);
+
+                    // don't overwrite if exists an overwriting is not requested
+                    if (patternFile.Options.Overwrite == false && File.Exists(fileName))
+                        //continue;
+                        return;
+
+                    // create directory
+                    Directory.CreateDirectory(Path.GetDirectoryName(fileName));
+
+                    // generated file content
+                    string genContent = patternFile.BaseContent;
+
+                    // BaseContent Replacements
+                    genContent = Replacer_PatternBaseContent(genContent,
+                                          table.TableNameSchema,
+                                          table.TableName);
+
+                    // for each pattern content
+                    genContent = PatternContentAppliesTo_OneTable(
+                        genContent,
+                        patternFile.PatternContents,
+                        table,
+                        null,
+                        null);
+
+                    // all is done! Write to file
+                    File.WriteAllText(fileName, genContent);
+                });
+            }
+        }
+
+        /// <summary>
+        /// Starts to apply general replacements to the pattern
+        /// </summary>
+        private void PatternFileAppliesTo_GeneralApplier(PatternFile patternFile)
+        {
+            string fileName = patternFile.Options.FilePath;
+
+            var generationPath = _projectDef.GenerationPath;
+            generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
+
+            // the general replacements
+            fileName = Replacer_GeneratorGeneral(fileName);
+
+            // the destination path
+            fileName = Path.Combine(generationPath, fileName);
+
+            // create directory
+            Directory.CreateDirectory(Path.GetDirectoryName(fileName));
+
+            // don't overwrite if exists an overwriting is not requested
+            if (patternFile.Options.Overwrite == false && File.Exists(fileName))
+                return;
+
+            // generated file content
+            string genContent = patternFile.BaseContent;
+
+            // general
+            genContent = Replacer_GeneratorGeneral(genContent);
+
+            // database provider
+            genContent = Replacer_DatabaseProvider(genContent);
+
+            // search for pattern in the general content
+            foreach (PatternContent pattern in patternFile.PatternContents) {
+                string partialName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
+
+                // is there a pattern for that
+                if (genContent.IndexOf(partialName) == -1)
+                    continue;
+
+                if (pattern.ConditionKeyMode == PatternConditionKeyMode.General ||
+                   pattern.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider) {
+                    string contentToReplace = PatternContentAppliesTo_General(pattern);
+
+                    genContent = genContent.Replace(partialName, contentToReplace);
+                }
+            }
+
+            // Write to file
+            File.WriteAllText(fileName, genContent);
+        }
+
+        /// <summary>
+        /// Starts to apply project files to the pattern
+        /// </summary>
+        private void PatternFileAppliesTo_ProjectFileApplier(PatternFile commonPattern)
+        {
+            var generationPath = _projectDef.GenerationPath;
+            generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
+
+            string fileName = Common.ReplaceEx(commonPattern.Options.FilePath, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
+            fileName = Path.Combine(generationPath, fileName);
+
+            // don't overwrite if exists an overwriting is not requested
+            if (commonPattern.Options.Overwrite == false && File.Exists(fileName))
+                return;
+
+            // create directory
+            Directory.CreateDirectory(Path.GetDirectoryName(fileName));
+
+            // generated file content
+            string genContent = commonPattern.BaseContent;
+
+            // general
+            genContent = Replacer_GeneratorGeneral(genContent);
+
+            // database provider class
+            genContent = Replacer_DatabaseProvider(genContent);
+
+            // Replacements
+            genContent = Common.ReplaceEx(genContent, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
+
+            // search for pattern in the general content
+            foreach (PatternContent pattern in commonPattern.PatternContents) {
+                string partialName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
+
+                // is there a pattern for that
+                if (genContent.IndexOf(partialName) == -1)
+                    continue;
+
+                if (pattern.ConditionKeyMode == PatternConditionKeyMode.ProjectFiles) {
+                    // Get project generated files, extnsion is specfied by the project
+                    string codeFilePattern = String.Format("*{0}", _patternProject.FileExtension);
+
+                    // Search the files
+                    string[] projectFiles = Directory.GetFiles(generationPath, codeFilePattern, SearchOption.AllDirectories);
+
+                    string contentToReplace = "";
+                    foreach (var projectFile in projectFiles) {
+                        string columnReplace = PatternContentAppliesTo_ProjectFiles(pattern, projectFile);
+
+                        if (!string.IsNullOrEmpty(columnReplace))
+                            contentToReplace += columnReplace + pattern.ItemsSeperator;
+                    }
+
+                    // removing unnecessary ItemsSeperator
+                    if (!string.IsNullOrEmpty(pattern.ItemsSeperator) && contentToReplace.EndsWith(pattern.ItemsSeperator))
+                        contentToReplace = contentToReplace.Remove(contentToReplace.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
+
+                    // replace
+                    genContent = genContent.Replace(partialName, contentToReplace);
+                }
+                else if (pattern.ConditionKeyMode == PatternConditionKeyMode.General ||
+                    pattern.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider) {
+                    string contentToReplace = PatternContentAppliesTo_General(pattern);
+
+                    genContent = genContent.Replace(partialName, contentToReplace);
+                }
+            }
+
+            // Write to file
+            File.WriteAllText(fileName, genContent);
+        }
+
+        #endregion PatternFileAppliesTo
+
+        #region PatternContentAppliesTo
+
+        /// <summary>
+        /// Partial content replacer.
+        /// </summary>
+        private string PatternContentAppliesTo_ProjectFiles(PatternContent partialContent, string fileNamePath)
+        {
+            var oneReplacer = partialContent.GetFirst();
+            return Replacer_ConditionItem_ProjectFile(oneReplacer.ContentText, fileNamePath);
+        }
+
+        /// <summary>
+        /// Partial content replacer.
+        /// </summary>
+        private string PatternContentAppliesTo_General(PatternContent partialContent)
+        {
+            if (partialContent.ConditionKeyMode == PatternConditionKeyMode.DatabaseProvider) {
+                ConditionItem dbReplacer = null;
+                switch (this._database.Provider) {
+                    case DatabaseProvider.Oracle:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
+                        break;
+
+                    case DatabaseProvider.SQLServer:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
+                        break;
+
+                    case DatabaseProvider.SQLite:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
+                        break;
+
+                    case DatabaseProvider.SqlCe4:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
+                        break;
+
+                    case DatabaseProvider.Npgsql:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Npgsql);
+                        break;
+
+                    case DatabaseProvider.MySql:
+                        dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.MySql);
+                        break;
+                }
+
+                if (dbReplacer != null)
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
+            }
+            else if (partialContent.ConditionKeyMode == PatternConditionKeyMode.General) {
+                var dbReplacer = partialContent.GetFirst();
+                if (dbReplacer != null)
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
+            }
+
+            return "";
+        }
+
+        /// <summary>
+        /// One table, one column or one foreignKey in table!
+        /// </summary>
+        private string PatternContentAppliesTo_OneTable(string baseContent,
+            List<PatternContent> patternContent,
+            DbTable table,
+            DbColumn column,
+            DbForeignKey foreignKey)
+        {
+            string appliedContent = "";
+
+            // ---------------------------------
+            // Only one table is applying here!
+
+            // table can not be null here
+            if (table == null) {
+                return baseContent;
+            }
+
+            foreach (var pattern in patternContent) {
+                string replacementName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
+
+                // is there a pattern for that
+                if (baseContent.IndexOf(replacementName) == -1)
+                    continue;
+
+                switch (pattern.ConditionKeyMode) {
+                    case PatternConditionKeyMode.General:
+                        // nothing!
+                        break;
+
+                    case PatternConditionKeyMode.DatabaseProvider:
+                        appliedContent = PatternContentAppliesTo_General(pattern);
+
+                        // base content
+                        if (!string.IsNullOrEmpty(pattern.BaseContent)) {
+                            appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
+                        }
+
+                        // internal pattern contents
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
+
+                        // replace the content
+                        baseContent = baseContent.Replace(replacementName, appliedContent);
+
+                        break;
+
+                    case PatternConditionKeyMode.TablesAll:
+                    case PatternConditionKeyMode.ViewsAll:
+                    case PatternConditionKeyMode.TablesAndViewsAll:
+                        // for one table? Meh, we do nothing!
+                        break;
+
+                    case PatternConditionKeyMode.TableAutoIncrement:
+                    case PatternConditionKeyMode.TableIndexConstraint:
+                    case PatternConditionKeyMode.TablePrimaryKey:
+                    case PatternConditionKeyMode.TableUniqueConstraint:
+                        appliedContent = ConditionItem_AppliesToTable(pattern, table);
+
+                        // base content
+                        if (!string.IsNullOrEmpty(pattern.BaseContent)) {
+                            appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
+                        }
+
+                        // internal pattern contents
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
+
+                        // replace the content
+                        baseContent = baseContent.Replace(replacementName, appliedContent);
+                        break;
+
+                    case PatternConditionKeyMode.Field:
+                    case PatternConditionKeyMode.FieldCondensedType:
+                    case PatternConditionKeyMode.FieldKeyReadType:
+                    case PatternConditionKeyMode.FieldKeyType:
+                    case PatternConditionKeyMode.FieldPrimaryKey:
+                    case PatternConditionKeyMode.FieldReferencedKeyType:
+                        appliedContent = "";
+
+                        // no special column is specified
+                        if (column == null) {
+                            // replace in the main content
+                            baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
+                        }
+                        else {
+                            // Apply the replacement to the pattern content
+                            string columnReplace = ConditionItem_AppliesToColumn(pattern, table, column);
+
+                            // The seperator
+                            if (!string.IsNullOrEmpty(columnReplace)) {
+                                // internal pattern contents
+                                // FOR EACH column
+                                if (pattern.ConditionContents.Count > 0) {
+                                    // nested call
+                                    columnReplace = PatternContentAppliesTo_OneTable(
+                                        columnReplace,
+                                        pattern.ConditionContents,
+                                        table,
+                                        column,
+                                        null);
+                                }
+                                appliedContent += columnReplace + pattern.ItemsSeperator;
+                            }
+                        }
+
+                        // Remove additional ItemsSeperator
+                        if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
+                            && appliedContent.EndsWith(pattern.ItemsSeperator))
+                            appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
+
+                        // internal pattern contents
+                        // FOR EACH column
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
 
                         // replace in the main content
                         baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
                         break;
 
-					default:
-						break;
-				}
-			}
+                    case PatternConditionKeyMode.FieldsAll:
+                    case PatternConditionKeyMode.FieldsCondensedTypeAll:
+                    case PatternConditionKeyMode.FieldsKeyReadTypeAll:
+                    case PatternConditionKeyMode.FieldsKeyTypeAll:
+                    case PatternConditionKeyMode.FieldsPrimaryKeyAll:
+                    case PatternConditionKeyMode.FieldsReferencedKeyTypeAll:
+                        appliedContent = "";
+
+                        // fetch the columns and apply the replacement operation
+                        foreach (var tableColumn in table.SchemaColumns) {
+                            // Apply the replacement to the pattern content
+                            string columnReplace = ConditionItem_AppliesToColumn(pattern, table, tableColumn);
+
+                            // The seperator
+                            if (!string.IsNullOrEmpty(columnReplace)) {
+                                // internal pattern contents
+                                // FOR EACH column
+                                if (pattern.ConditionContents.Count > 0) {
+                                    // nested call
+                                    columnReplace = PatternContentAppliesTo_OneTable(
+                                        columnReplace,
+                                        pattern.ConditionContents,
+                                        table,
+                                        tableColumn, null);
+                                }
+                                appliedContent += columnReplace + pattern.ItemsSeperator;
+                            }
+                        }
+
+                        // Remove additional ItemsSeperator
+                        if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
+                            && appliedContent.EndsWith(pattern.ItemsSeperator))
+                            appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
+
+                        // internal pattern contents
+                        // FOR EACH column
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
+
+                        // replace in the main content
+                        baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
+                        break;
+
+                    case PatternConditionKeyMode.ForeignKeyDeleteAction:
+                    case PatternConditionKeyMode.ForeignKeyUpdateAction:
+                    case PatternConditionKeyMode.FieldForeignKeyLocalColumn:
+                    case PatternConditionKeyMode.FieldForeignKeyForeignColumn:
+                        appliedContent = "";
+
+                        if (foreignKey == null) {
+                            // replace in the main content
+                            baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
+                        }
+                        else {
+                            // Apply the replacement to the pattern content
+                            string columnReplace = ConditionItem_AppliesToForeignKeyColumns(pattern, table, foreignKey);
+
+                            // The seperator
+                            if (!string.IsNullOrEmpty(columnReplace)) {
+                                // internal pattern contents
+                                if (pattern.ConditionContents.Count > 0) {
+                                    // nested call
+                                    columnReplace = PatternContentAppliesTo_OneTable(
+                                        columnReplace,
+                                        pattern.ConditionContents,
+                                        table,
+                                        null,
+                                        foreignKey);
+                                }
+
+                                appliedContent += columnReplace + pattern.ItemsSeperator;
+                            }
+                        }
+
+                        // Remove additional ItemsSeperator
+                        if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
+                            && appliedContent.EndsWith(pattern.ItemsSeperator))
+                            appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
+
+                        // internal pattern contents
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
+
+                        // replace in the main content
+                        baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
+                        break;
+
+                    case PatternConditionKeyMode.FieldsForeignKeyAll:
+                    case PatternConditionKeyMode.TableForeignKey:
+                        appliedContent = "";
+
+                        // fetch the columns and apply the replacement operation
+                        foreach (var dbForeignKey in table.ForeignKeys) {
+                            // Apply the replacement to the pattern content
+                            string columnReplace = ConditionItem_AppliesToForeignKeyColumns(pattern, table, dbForeignKey);
+
+                            // The seperator
+                            if (!string.IsNullOrEmpty(columnReplace)) {
+                                // internal pattern contents
+                                if (pattern.ConditionContents.Count > 0) {
+                                    // nested call
+                                    columnReplace = PatternContentAppliesTo_OneTable(
+                                        columnReplace,
+                                        pattern.ConditionContents,
+                                        table,
+                                        null,
+                                        dbForeignKey);
+                                }
+
+                                appliedContent += columnReplace + pattern.ItemsSeperator;
+                            }
+                        }
+
+                        // Remove additional ItemsSeperator
+                        if (!string.IsNullOrEmpty(pattern.ItemsSeperator)
+                            && appliedContent.EndsWith(pattern.ItemsSeperator))
+                            appliedContent = appliedContent.Remove(appliedContent.Length - pattern.ItemsSeperator.Length, pattern.ItemsSeperator.Length);
+
+                        // internal pattern contents
+                        if (pattern.ConditionContents.Count > 0) {
+                            // nested call
+                            appliedContent = PatternContentAppliesTo_OneTable(appliedContent, pattern.ConditionContents, table, null, null);
+                        }
+
+                        // replace in the main content
+                        baseContent = Common.ReplaceEx(baseContent, replacementName, appliedContent, StringComparison.CurrentCulture);
+                        break;
+
+                    default:
+                        break;
+                }
+            }
 
             // Standard replacements available everywhere
             baseContent = Common.ReplaceExIgnoreCase(baseContent, ReplaceConsts.TableName, table.TableNameSchema);
@@ -778,509 +727,479 @@ namespace SalarDbCodeGenerator.GeneratorEngine
             baseContent = Common.ReplaceExIgnoreCase(baseContent, ReplaceConsts.TableOwnerNameAsPrefix, TableOwnerNameAsPrefix(table));
 
             return baseContent;
-		}
+        }
 
+        private string PatternContentAppliesTo_TablesAndViews(
+            string baseContent,
+            List<PatternContent> patternContent,
+            DbTable[] tablesList,
+            DbTable[] viewsList)
+        {
+            string appliedContent = "";
 
-		string PatternContentAppliesTo_TablesAndViews(
-			string baseContent,
-			List<PatternContent> patternContent,
-			DbTable[] tablesList,
-			DbTable[] viewsList)
-		{
-			string appliedContent = "";
+            // ---------------------------------
+            // Here, all tables/views will apply
 
-			// ---------------------------------
-			// Here, all tables/views will apply
+            foreach (var pattern in patternContent) {
+                string replacementName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
+                int index = 0;
 
-			foreach (var pattern in patternContent)
-			{
-				string replacementName = string.Format(ReplaceConsts.PatternContentReplacer, pattern.Name);
-				int index = 0;
+                // is there a pattern for that
+                if (baseContent.IndexOf(replacementName) == -1)
+                    continue;
 
-				// is there a pattern for that
-				if (baseContent.IndexOf(replacementName) == -1)
-					continue;
+                switch (pattern.ConditionKeyMode) {
+                    //case PatternContentAppliesTo.General:
+                    //    // general part
+                    //    appliedContent = PatternContentAppliesTo_ProjectFileGeneral(pattern);
 
-				switch (pattern.ConditionKeyMode)
-				{
-					//case PatternContentAppliesTo.General:
-					//    // general part
-					//    appliedContent = PatternContentAppliesTo_ProjectFileGeneral(pattern);
+                    //    // replace the content
+                    //    baseContent = baseContent.Replace(replacementName, appliedContent);
 
-					//    // replace the content
-					//    baseContent = baseContent.Replace(replacementName, appliedContent);
+                    //    break;
+                    case PatternConditionKeyMode.DatabaseProvider:
+                        ConditionItem dbReplacer = null;
+                        switch (this._database.Provider) {
+                            case DatabaseProvider.Oracle:
+                                dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
+                                break;
 
-					//    break;
-					case PatternConditionKeyMode.DatabaseProvider:
-						ConditionItem dbReplacer = null;
-						switch (this._database.Provider)
-						{
-							case DatabaseProvider.Oracle:
-								dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
-								break;
+                            case DatabaseProvider.SQLServer:
+                                dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
+                                break;
 
-							case DatabaseProvider.SQLServer:
-								dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
-								break;
+                            case DatabaseProvider.SQLite:
+                                dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
+                                break;
 
-							case DatabaseProvider.SQLite:
-								dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
-								break;
+                            case DatabaseProvider.SqlCe4:
+                                dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
+                                break;
 
-							case DatabaseProvider.SqlCe4:
-								dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
-								break;
+                            case DatabaseProvider.Npgsql:
+                                dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Npgsql);
+                                break;
+                        }
 
-							case DatabaseProvider.Npgsql:
-								dbReplacer = pattern.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Npgsql);
-								break;
-						}
+                        if (dbReplacer != null) {
+                            appliedContent = Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
 
-						if (dbReplacer != null)
-						{
-							appliedContent = Replacer_ConditionItem_AppliesToGeneral(dbReplacer.ContentText);
+                            // replace the content
+                            baseContent = baseContent.Replace(replacementName, appliedContent);
+                        }
+                        break;
 
-							// replace the content
-							baseContent = baseContent.Replace(replacementName, appliedContent);
-						}
-						break;
+                    case PatternConditionKeyMode.TablesAndViewsAll:
+                        appliedContent = "";
+                        index = 0;
 
+                        // applying all the views
+                        for (int i = 0; i < tablesList.Length; i++) {
+                            var tbl = tablesList[i];
+                            if (!UserHasSelectedTable(tbl.TableName))
+                                continue;
 
-					case PatternConditionKeyMode.TablesAndViewsAll:
-						appliedContent = "";
-						index = 0;
+                            if (index > 0)
+                                appliedContent += pattern.ItemsSeperator;
+                            appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, tbl);
 
-						// applying all the views
-						for (int i = 0; i < tablesList.Length; i++)
-						{
-							var tbl = tablesList[i];
-							if (!UserHasSelectedTable(tbl.TableName))
-								continue;
+                            // the seperator identicator
+                            index++;
 
-							if (index > 0)
-								appliedContent += pattern.ItemsSeperator;
-							appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, tbl);
+                            // internal pattern contents
+                            if (pattern.ConditionContents.Count > 0) {
+                                // nested call
+                                appliedContent = PatternContentAppliesTo_OneTable(
+                                    appliedContent,
+                                    pattern.ConditionContents,
+                                    tbl,
+                                    null, null);
+                            }
+                        }
 
-							// the seperator identicator
-							index++;
+                        // seperator between tables and views!
+                        // we have views too
+                        if (viewsList.Length > 0 && _projectDef.DbSettions.HasSelectedView())
+                            appliedContent += pattern.ItemsSeperator;
 
-							// internal pattern contents
-							if (pattern.ConditionContents.Count > 0)
-							{
-								// nested call
-								appliedContent = PatternContentAppliesTo_OneTable(
-									appliedContent,
-									pattern.ConditionContents,
-									tbl,
-									null, null);
-							}
-						}
+                        index = 0;
+                        // applying all the views
+                        for (int i = 0; i < viewsList.Length; i++) {
+                            var view = viewsList[i];
 
-						// seperator between tables and views!
-						// we have views too
-						if (viewsList.Length > 0 && _projectDef.DbSettions.HasSelectedView())
-							appliedContent += pattern.ItemsSeperator;
+                            // check if selected by user
+                            if (!UserHasSelectedView(view.TableName))
+                                continue;
 
-						index = 0;
-						// applying all the views
-						for (int i = 0; i < viewsList.Length; i++)
-						{
-							var view = viewsList[i];
+                            if (index > 0)
+                                appliedContent += pattern.ItemsSeperator;
+                            appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, view);
 
-							// check if selected by user
-							if (!UserHasSelectedView(view.TableName))
-								continue;
+                            // the seperator identicator
+                            index++;
 
-							if (index > 0)
-								appliedContent += pattern.ItemsSeperator;
-							appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, view);
+                            // internal pattern contents
+                            if (pattern.ConditionContents.Count > 0) {
+                                // nested call
+                                appliedContent = PatternContentAppliesTo_OneTable(
+                                    appliedContent,
+                                    pattern.ConditionContents,
+                                    view,
+                                    null, null);
+                            }
+                        }
 
-							// the seperator identicator
-							index++;
+                        // base content
+                        if (!string.IsNullOrEmpty(pattern.BaseContent)) {
+                            appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
+                        }
 
-							// internal pattern contents
-							if (pattern.ConditionContents.Count > 0)
-							{
-								// nested call
-								appliedContent = PatternContentAppliesTo_OneTable(
-									appliedContent,
-									pattern.ConditionContents,
-									view,
-									null, null);
-							}
-						}
+                        // replace the content
+                        baseContent = baseContent.Replace(replacementName, appliedContent);
+                        break;
 
-						// base content
-						if (!string.IsNullOrEmpty(pattern.BaseContent))
-						{
-							appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
-						}
+                    case PatternConditionKeyMode.TablesAll:
+                        appliedContent = "";
+                        index = 0;
 
-						// replace the content
-						baseContent = baseContent.Replace(replacementName, appliedContent);
-						break;
+                        // applying all the views
+                        for (int i = 0; i < tablesList.Length; i++) {
+                            var tbl = tablesList[i];
+                            if (!UserHasSelectedTable(tbl.TableName))
+                                continue;
 
-					case PatternConditionKeyMode.TablesAll:
-						appliedContent = "";
-						index = 0;
+                            if (index > 0)
+                                appliedContent += pattern.ItemsSeperator;
+                            appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, tbl);
 
-						// applying all the views
-						for (int i = 0; i < tablesList.Length; i++)
-						{
-							var tbl = tablesList[i];
-							if (!UserHasSelectedTable(tbl.TableName))
-								continue;
+                            // the seperator identicator
+                            index++;
 
-							if (index > 0)
-								appliedContent += pattern.ItemsSeperator;
-							appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, tbl);
+                            // internal pattern contents
+                            if (pattern.ConditionContents.Count > 0) {
+                                // nested call
+                                appliedContent = PatternContentAppliesTo_OneTable(
+                                    appliedContent, pattern.ConditionContents,
+                                    tbl,
+                                    null, null);
+                            }
+                        }
 
-							// the seperator identicator
-							index++;
+                        // base content
+                        if (!string.IsNullOrEmpty(pattern.BaseContent)) {
+                            appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
+                        }
 
-							// internal pattern contents
-							if (pattern.ConditionContents.Count > 0)
-							{
-								// nested call
-								appliedContent = PatternContentAppliesTo_OneTable(
-									appliedContent, pattern.ConditionContents,
-									tbl,
-									null, null);
-							}
-						}
+                        // replace the content
+                        baseContent = baseContent.Replace(replacementName, appliedContent);
+                        break;
 
-						// base content
-						if (!string.IsNullOrEmpty(pattern.BaseContent))
-						{
-							appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
-						}
+                    case PatternConditionKeyMode.ViewsAll:
+                        index = 0;
+                        appliedContent = "";
 
-						// replace the content
-						baseContent = baseContent.Replace(replacementName, appliedContent);
-						break;
+                        // applying all the views
+                        for (int i = 0; i < viewsList.Length; i++) {
+                            var view = viewsList[i];
 
-					case PatternConditionKeyMode.ViewsAll:
-						index = 0;
-						appliedContent = "";
+                            // check if selected by user
+                            if (!UserHasSelectedView(view.TableName))
+                                continue;
 
-						// applying all the views
-						for (int i = 0; i < viewsList.Length; i++)
-						{
-							var view = viewsList[i];
+                            if (index > 0)
+                                appliedContent += pattern.ItemsSeperator;
+                            appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, view);
 
-							// check if selected by user
-							if (!UserHasSelectedView(view.TableName))
-								continue;
+                            // the seperator identicator
+                            index++;
 
-							if (index > 0)
-								appliedContent += pattern.ItemsSeperator;
-							appliedContent += ConditionItem_AppliesToTableAndViewsAll(pattern, view);
+                            // internal pattern contents
+                            if (pattern.ConditionContents.Count > 0) {
+                                // nested call
+                                appliedContent = PatternContentAppliesTo_OneTable(
+                                    appliedContent, pattern.ConditionContents,
+                                    view,
+                                    null, null);
+                            }
+                        }
 
-							// the seperator identicator
-							index++;
+                        // base content
+                        if (!string.IsNullOrEmpty(pattern.BaseContent)) {
+                            appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
+                        }
 
-							// internal pattern contents
-							if (pattern.ConditionContents.Count > 0)
-							{
-								// nested call
-								appliedContent = PatternContentAppliesTo_OneTable(
-									appliedContent, pattern.ConditionContents,
-									view,
-									null, null);
-							}
-						}
+                        // replace the content
+                        baseContent = baseContent.Replace(replacementName, appliedContent);
+                        break;
+                }
+            }
+            return baseContent;
+        }
 
-						// base content
-						if (!string.IsNullOrEmpty(pattern.BaseContent))
-						{
-							appliedContent = pattern.BaseContent.Replace(ReplaceConsts.PatternContentInnerContents, appliedContent);
-						}
+        #endregion PatternContentAppliesTo
 
-						// replace the content
-						baseContent = baseContent.Replace(replacementName, appliedContent);
-						break;
+        #region Content Replacers
 
-				}
-			}
-			return baseContent;
-		}
-		#endregion
+        /// <summary>
+        /// Applies data to pattern content replacement
+        /// </summary>
+        private string Replacer_ConditionItem_AppliesToGeneral(string content)
+        {
+            string generationPath = _projectDef.GenerationPath;
+            generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
 
-		#region Content Replacers
+            if (generationPath[generationPath.Length - 1] != Path.DirectorySeparatorChar)
+                generationPath += Path.DirectorySeparatorChar;
 
-		/// <summary>
-		/// Applies data to pattern content replacement
-		/// </summary>
-		string Replacer_ConditionItem_AppliesToGeneral(string content)
-		{
-			string generationPath = _projectDef.GenerationPath;
-			generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
+            // Remove generation path form string
 
-			if (generationPath[generationPath.Length - 1] != Path.DirectorySeparatorChar)
-				generationPath += Path.DirectorySeparatorChar;
+            // general
+            content = Replacer_GeneratorGeneral(content);
 
-			// Remove generation path form string
+            // database provider reference
+            content = Replacer_DatabaseProvider(content);
 
-			// general
-			content = Replacer_GeneratorGeneral(content);
+            return content;
+        }
 
-			// database provider reference
-			content = Replacer_DatabaseProvider(content);
+        /// <summary>
+        /// Applies data to pattern content replacement for column
+        /// </summary>
+        private string Replacer_ConditionItem_ProjectFile(string content, string fileNamePath)
+        {
+            string generationPath = _projectDef.GenerationPath;
+            generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
 
-			return content;
-		}
+            if (generationPath[generationPath.Length - 1] != Path.DirectorySeparatorChar)
+                generationPath += Path.DirectorySeparatorChar;
 
-		/// <summary>
-		/// Applies data to pattern content replacement for column
-		/// </summary>
-		string Replacer_ConditionItem_ProjectFile(string content, string fileNamePath)
-		{
-			string generationPath = _projectDef.GenerationPath;
-			generationPath = Common.ProjectPathMakeAbsolute(generationPath, _projectDef.ProjectFileName);
+            // Remove generation path form string
+            string projectItemPath = fileNamePath.Replace(generationPath, "");
 
-			if (generationPath[generationPath.Length - 1] != Path.DirectorySeparatorChar)
-				generationPath += Path.DirectorySeparatorChar;
+            content = Common.ReplaceEx(content, ReplaceConsts.ProjectItemPath, projectItemPath, StringComparison.CurrentCultureIgnoreCase);
+            content = Common.ReplaceEx(content, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
 
-			// Remove generation path form string
-			string projectItemPath = fileNamePath.Replace(generationPath, "");
+            // general
+            content = Replacer_GeneratorGeneral(content);
 
-			content = Common.ReplaceEx(content, ReplaceConsts.ProjectItemPath, projectItemPath, StringComparison.CurrentCultureIgnoreCase);
-			content = Common.ReplaceEx(content, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
+            return content;
+        }
 
-			// general
-			content = Replacer_GeneratorGeneral(content);
+        /// <summary>
+        /// Applies table data to pattern content replacement
+        /// </summary>
+        private string Replacer_ConditionItem_AppliesToTable(string content, DbTable table)
+        {
+            if (string.IsNullOrWhiteSpace(content)) {
+                return content;
+            }
 
-			return content;
-		}
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableName, table.TableNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDb, table.GetEscapedTableName());
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerName, table.OwnerName);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerNameAsPrefix, TableOwnerNameAsPrefix(table));
 
-		/// <summary>
-		/// Applies table data to pattern content replacement
-		/// </summary>
-		string Replacer_ConditionItem_AppliesToTable(string content, DbTable table)
-		{
-			if (string.IsNullOrWhiteSpace(content))
-			{
-				return content;
-			}
+            // general
+            content = Replacer_GeneratorGeneral(content);
 
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableName, table.TableNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDb, table.GetEscapedTableName());
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerName, table.OwnerName);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerNameAsPrefix, TableOwnerNameAsPrefix(table));
+            // database provider class
+            content = Replacer_DatabaseProvider(content);
 
-			// general
-			content = Replacer_GeneratorGeneral(content);
+            var autoKey = table.GetFirstAutoIncrementField();
+            var primaryKey = table.GetPrimaryKey();
 
-			// database provider class
-			content = Replacer_DatabaseProvider(content);
-
-			var autoKey = table.GetFirstAutoIncrementField();
-			var primaryKey = table.GetPrimaryKey();
-
-			if (autoKey == null)
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, _patternProject.LanguageSettings.VoidDataType);
-			else
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, autoKey.DataTypeDotNet);
+            if (autoKey == null)
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, _patternProject.LanguageSettings.VoidDataType);
+            else
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, autoKey.DataTypeDotNet);
 
             // InsertWithId replacements - must be done first so primary key can replace after
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.InsertWithIdValuesStatement, _schemaEngine.GetInsertWithIdValues());
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.InsertWithIdSuffix, _schemaEngine.GetInsertWithSuffix());
 
             // Primary key replacements - must be done after insert with id replacements
-            if (primaryKey == null)
-			{
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, _patternProject.LanguageSettings.VoidDataType);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, "");
-			}
-			else
-			{
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, primaryKey.DataTypeDb);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, FieldType_ColumnDataTypeSize(primaryKey));
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, primaryKey.DataTypeDotNet);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, primaryKey.FieldNameSchema);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, primaryKey.FieldNameDb);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, primaryKey.SequenceName ?? "");
-			}
+            if (primaryKey == null) {
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, _patternProject.LanguageSettings.VoidDataType);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, "");
+            }
+            else {
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, primaryKey.DataTypeDb);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, FieldType_ColumnDataTypeSize(primaryKey));
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, primaryKey.DataTypeDotNet);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, primaryKey.FieldNameSchema);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, primaryKey.FieldNameDb);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, primaryKey.SequenceName ?? "");
+            }
 
-			return content;
-		}
+            return content;
+        }
 
-		/// <summary>
-		/// Applies column data to pattern content replacement
-		/// </summary>
-		string Replacer_ConditionItem_AppliesToColumn(string content, DbTable table, DbColumn column)
-		{
-			// table of the column
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableName, table.TableNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDb, table.GetEscapedTableName());
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerName, table.OwnerName);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerNameAsPrefix, TableOwnerNameAsPrefix(table));
+        /// <summary>
+        /// Applies column data to pattern content replacement
+        /// </summary>
+        private string Replacer_ConditionItem_AppliesToColumn(string content, DbTable table, DbColumn column)
+        {
+            // table of the column
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableName, table.TableNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDb, table.GetEscapedTableName());
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerName, table.OwnerName);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableOwnerNameAsPrefix, TableOwnerNameAsPrefix(table));
 
-			// general
-			content = Replacer_GeneratorGeneral(content);
+            // general
+            content = Replacer_GeneratorGeneral(content);
 
-			// database provider class
-			content = Replacer_DatabaseProvider(content);
+            // database provider class
+            content = Replacer_DatabaseProvider(content);
 
-			// referenced table of the column
-			if (column.IsReferenceKey && column.IsReferenceKeyTable != null)
-			{
-				var refTable = column.IsReferenceKeyTable;
+            // referenced table of the column
+            if (column.IsReferenceKey && column.IsReferenceKeyTable != null) {
+                var refTable = column.IsReferenceKeyTable;
 
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameRefField, refTable.TableNameSchema);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDbRefField, refTable.GetEscapedTableName());
-			}
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameRefField, refTable.TableNameSchema);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.TableNameDbRefField, refTable.GetEscapedTableName());
+            }
 
-			// column information
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDataType, column.DataTypeDotNet);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldName, column.FieldNameSchema);
+            // column information
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDataType, column.DataTypeDotNet);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldName, column.FieldNameSchema);
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldNameDb, column.FieldNameDb);
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldNameDbEscaped, column.FieldNameDbEscaped);
 
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldOrdinalValue, column.ColumnOrdinal.ToString());
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldIsPrimaryKey, column.PrimaryKey.ToString().ToLower());
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldCanBeNull, column.AllowNull.ToString().ToLower());
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldOrdinalValue, column.ColumnOrdinal.ToString());
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldIsPrimaryKey, column.PrimaryKey.ToString().ToLower());
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldCanBeNull, column.AllowNull.ToString().ToLower());
 
-			// column description
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDescription, column.UserDescription);
+            // column description
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDescription, column.UserDescription);
 
-			// Database field type
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbType, column.DataTypeDb);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbTypeSize, FieldType_ColumnDataTypeSize(column));
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbSize, FieldType_ColumnDataSize(column));
+            // Database field type
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbType, column.DataTypeDb);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbTypeSize, FieldType_ColumnDataTypeSize(column));
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.FieldDbSize, FieldType_ColumnDataSize(column));
 
+            if (column.AutoIncrement)
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, column.DataTypeDotNet);
+            else
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, _patternProject.LanguageSettings.VoidDataType);
 
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, column.SequenceName ?? "");
 
-			if (column.AutoIncrement)
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, column.DataTypeDotNet);
-			else
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.AutoIncrementDataType, _patternProject.LanguageSettings.VoidDataType);
+            if (column.PrimaryKey) {
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, column.DataTypeDb);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, FieldType_ColumnDataTypeSize(column));
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, column.DataTypeDotNet);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, column.FieldNameSchema);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, column.FieldNameDb);
+            }
+            else {
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, _patternProject.LanguageSettings.VoidDataType);
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, "");
+                content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, "");
+            }
 
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeySequenceName, column.SequenceName ?? "");
+            return content;
+        }
 
-			if (column.PrimaryKey)
-			{
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, column.DataTypeDb);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, FieldType_ColumnDataTypeSize(column));
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, column.DataTypeDotNet);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, column.FieldNameSchema);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, column.FieldNameDb);
-			}
-			else
-			{
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbType, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDbTypeSize, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyDataType, _patternProject.LanguageSettings.VoidDataType);
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyName, "");
-				content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.PrimaryKeyNameDb, "");
-			}
+        /// <summary>
+        /// Applies table foreign keys to pattern content replacement
+        /// </summary>
+        private string Replacer_ConditionItem_AppliesToForeignKeys(string content, DbTable table)
+        {
+            // this section should be ignored if there is no foreign keys!
+            if (table.ForeignKeys.Count == 0) {
+                // No foreign keys! go away
+                return "";
+            }
 
-			return content;
-		}
+            // local table
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableName, table.TableNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableNameDb, table.GetEscapedTableName());
 
-		/// <summary>
-		/// Applies table foreign keys to pattern content replacement
-		/// </summary>
-		string Replacer_ConditionItem_AppliesToForeignKeys(string content, DbTable table)
-		{
-			// this section should be ignored if there is no foreign keys!
-			if (table.ForeignKeys.Count == 0)
-			{
-				// No foreign keys! go away
-				return "";
-			}
+            // the result
+            string result = "";
 
-			// local table
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableName, table.TableNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableNameDb, table.GetEscapedTableName());
+            // fetch foreign keys
+            foreach (var foreignKey in table.ForeignKeys) {
+                // the content copy for each foreign key
+                string foreignContent = content;
 
-			// the result
-			string result = "";
+                // naturalize names
+                foreignContent = Replacer_ConditionItem_AppliesToForeignKey(foreignContent, table, foreignKey);
 
-			// fetch foreign keys
-			foreach (var foreignKey in table.ForeignKeys)
-			{
-				// the content copy for each foreign key
-				string foreignContent = content;
+                if (!string.IsNullOrEmpty(foreignContent))
+                    // add it to the result
+                    result += ReplaceConsts.NewLine + foreignContent;
+            }
 
-				// naturalize names
-				foreignContent = Replacer_ConditionItem_AppliesToForeignKey(foreignContent, table, foreignKey);
+            // the result
+            return result;
+        }
 
+        /// <summary>
+        /// Applies foreign key column data to pattern content replacement
+        /// </summary>
+        private string Replacer_ConditionItem_AppliesToForeignKey(string content, DbTable table, DbForeignKey foreignKey)
+        {
+            // NOTE: foreign keys are always for TABLEs
+            // Checking if user has selected this table
+            // Also checking the option!
+            if (!_optionGenerateUnselectedForeigns && !UserHasSelectedTable(foreignKey.ForeignTableName)) {
+                // User has not selected this foreign table
+                return string.Empty;
+            }
 
-				if (!string.IsNullOrEmpty(foreignContent))
-					// add it to the result
-					result += ReplaceConsts.NewLine + foreignContent;
-			}
+            // general
+            content = Replacer_GeneratorGeneral(content);
 
-			// the result
-			return result;
-		}
+            // database provider class
+            content = Replacer_DatabaseProvider(content);
 
-		/// <summary>
-		/// Applies foreign key column data to pattern content replacement
-		/// </summary>
-		string Replacer_ConditionItem_AppliesToForeignKey(string content, DbTable table, DbForeignKey foreignKey)
-		{
+            // local table
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableName, table.TableNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableNameDb, table.GetEscapedTableName());
 
-			// NOTE: foreign keys are always for TABLEs
-			// Checking if user has selected this table
-			// Also checking the option!
-			if (!_optionGenerateUnselectedForeigns && !UserHasSelectedTable(foreignKey.ForeignTableName))
-			{
-				// User has not selected this foreign table
-				return string.Empty;
-			}
+            // foreign table
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableNameAsField, foreignKey.ForeignTableNameInLocalTable);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableName, foreignKey.ForeignTable.TableNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableNameDb, foreignKey.ForeignTable.GetEscapedTableName());
 
-			// general
-			content = Replacer_GeneratorGeneral(content);
-
-			// database provider class
-			content = Replacer_DatabaseProvider(content);
-
-			// local table
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableName, table.TableNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalTableNameDb, table.GetEscapedTableName());
-
-			// foreign table
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableNameAsField, foreignKey.ForeignTableNameInLocalTable);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableName, foreignKey.ForeignTable.TableNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignTableNameDb, foreignKey.ForeignTable.GetEscapedTableName());
-
-			// ===================================
-			// local field
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDataType, foreignKey.LocalColumn.DataTypeDotNet);
+            // ===================================
+            // local field
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDataType, foreignKey.LocalColumn.DataTypeDotNet);
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldName, foreignKey.LocalColumn.FieldNameSchema);
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldNameParameter, FixupForUnicodeConversion(foreignKey.LocalColumn));
             content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldNameDb, foreignKey.LocalColumn.FieldNameDb);
-			// no oridianl, foreignContent = ReplaceExIgnoreCase(foreignContent, ReplaceConsts.LocalFieldOrdinalValue, foreignKey.LocalColumn.ColumnOrdinal.ToString());
-			// column description
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDescription, foreignKey.LocalColumn.UserDescription);
-			// Database field type
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDbTypeSize, FieldType_ColumnDataTypeSize(foreignKey.LocalColumn));
+            // no oridianl, foreignContent = ReplaceExIgnoreCase(foreignContent, ReplaceConsts.LocalFieldOrdinalValue, foreignKey.LocalColumn.ColumnOrdinal.ToString());
+            // column description
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDescription, foreignKey.LocalColumn.UserDescription);
+            // Database field type
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.LocalFieldDbTypeSize, FieldType_ColumnDataTypeSize(foreignKey.LocalColumn));
 
-
-			// ===================================
-			// Foreign field
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDataType, foreignKey.ForeignColumn.DataTypeDotNet);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldName, foreignKey.ForeignColumn.FieldNameSchema);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldNameDb, foreignKey.ForeignColumn.FieldNameDb);
-			// no oridianl, foreignContent = ReplaceExIgnoreCase(foreignContent, ReplaceConsts.ForeignFieldOrdinalValue, foreignKey.ForeignColumn.ColumnOrdinal.ToString());
-			// column description
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDescription, foreignKey.ForeignColumn.UserDescription);
-			// Database field type
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDbTypeSize, FieldType_ColumnDataTypeSize(foreignKey.ForeignColumn));
-			return content;
-		}
+            // ===================================
+            // Foreign field
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDataType, foreignKey.ForeignColumn.DataTypeDotNet);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldName, foreignKey.ForeignColumn.FieldNameSchema);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldNameDb, foreignKey.ForeignColumn.FieldNameDb);
+            // no oridianl, foreignContent = ReplaceExIgnoreCase(foreignContent, ReplaceConsts.ForeignFieldOrdinalValue, foreignKey.ForeignColumn.ColumnOrdinal.ToString());
+            // column description
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDescription, foreignKey.ForeignColumn.UserDescription);
+            // Database field type
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.ForeignFieldDbTypeSize, FieldType_ColumnDataTypeSize(foreignKey.ForeignColumn));
+            return content;
+        }
 
         private string FixupForUnicodeConversion(DbColumn field)
         {
             if (String.Equals(field.DataTypeDb, "VARCHAR", StringComparison.OrdinalIgnoreCase)) {
                 return $"new DbString() {{ IsAnsi = true, Value = {field.FieldNameSchema} }}";
-            } else {
+            }
+            else {
                 return field.FieldNameSchema;
             }
         }
@@ -1288,37 +1207,31 @@ namespace SalarDbCodeGenerator.GeneratorEngine
         /// <summary>
         /// Applies table index constraintsto pattern content replacement
         /// </summary>
-        string Replacer_ConditionItem_AppliesToIndexConstraints(string content, DbTable table, bool uniqueKeys)
-		{
-			// check if there is no constraints
-			if (table.Indexes.Count == 0)
-			{
-				return "";
-			}
+        private string Replacer_ConditionItem_AppliesToIndexConstraints(string content, DbTable table, bool uniqueKeys)
+        {
+            // check if there is no constraints
+            if (table.Indexes.Count == 0) {
+                return "";
+            }
 
-			content = Replacer_PatternBaseContent(content, table.TableNameSchema, table.GetEscapedTableName());
+            content = Replacer_PatternBaseContent(content, table.TableNameSchema, table.GetEscapedTableName());
 
-			// the result
-			string result = "";
+            // the result
+            string result = "";
 
-			// fetch constraints keys
-			foreach (var indexKey in table.Indexes)
-			{
-				if (!indexKey.IsUnique && uniqueKeys)
-				{
-					// the key is not unique and it is requested, then go away
-					continue;
-				}
-				if (indexKey.IsUnique && !uniqueKeys)
-				{
-					// the key is unique and it is not requested, then go away
-					continue;
-				}
+            // fetch constraints keys
+            foreach (var indexKey in table.Indexes) {
+                if (!indexKey.IsUnique && uniqueKeys) {
+                    // the key is not unique and it is requested, then go away
+                    continue;
+                }
+                if (indexKey.IsUnique && !uniqueKeys) {
+                    // the key is unique and it is not requested, then go away
+                    continue;
+                }
 
-
-
-				// the content copy for each foreign key
-				string indexContent = content;
+                // the content copy for each foreign key
+                string indexContent = content;
 
                 // the column general replacer
                 indexContent = Replacer_ConditionItem_AppliesToColumn(indexContent, table, indexKey.Keys[0].KeyColumn);
@@ -1336,138 +1249,131 @@ namespace SalarDbCodeGenerator.GeneratorEngine
 
                 // add it to the result
                 result += ReplaceConsts.NewLine + indexContent;
-			}
+            }
 
-			return result;
-		}
+            return result;
+        }
 
-		#endregion
+        #endregion Content Replacers
 
-		#region ConditionItem_AppliesTo
-		string ConditionItem_AppliesToTableAndViewsAll(PatternContent partialContent, DbTable table)
-		{
-			var conditionContent = partialContent.GetFirst();
-			return Replacer_ConditionItem_AppliesToTable(conditionContent.ContentText, table);
-		}
+        #region ConditionItem_AppliesTo
 
-		/// <summary>
-		/// Partial content replacer.
-		/// </summary>
-		string ConditionItem_AppliesToTable(PatternContent partialContent, DbTable table)
-		{
-			// Find suitable replacement type
-			switch (partialContent.ConditionKeyMode)
-			{
-				//case PatternConditionKeyMode.DatabaseProvider:
+        private string ConditionItem_AppliesToTableAndViewsAll(PatternContent partialContent, DbTable table)
+        {
+            var conditionContent = partialContent.GetFirst();
+            return Replacer_ConditionItem_AppliesToTable(conditionContent.ContentText, table);
+        }
 
-				//    ConditionItem dbReplacer = null;
+        /// <summary>
+        /// Partial content replacer.
+        /// </summary>
+        private string ConditionItem_AppliesToTable(PatternContent partialContent, DbTable table)
+        {
+            // Find suitable replacement type
+            switch (partialContent.ConditionKeyMode) {
+                //case PatternConditionKeyMode.DatabaseProvider:
 
-				//    switch (this._database.Provider)
-				//    {
-				//        case DatabaseProvider.Oracle:
-				//            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
-				//            break;
+                //    ConditionItem dbReplacer = null;
 
-				//        case DatabaseProvider.SQLServer:
-				//            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
-				//            break;
+                //    switch (this._database.Provider)
+                //    {
+                //        case DatabaseProvider.Oracle:
+                //            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.Oracle);
+                //            break;
 
-				//        case DatabaseProvider.SQLite:
-				//            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
-				//            break;
+                //        case DatabaseProvider.SQLServer:
+                //            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLServer);
+                //            break;
 
-				//        case DatabaseProvider.SqlCe4:
-				//            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
-				//            break;
-				//    }
+                //        case DatabaseProvider.SQLite:
+                //            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SQLite);
+                //            break;
 
-				//    if (dbReplacer == null)
-				//        return "";
+                //        case DatabaseProvider.SqlCe4:
+                //            dbReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.DatabaseProvider.SqlCe4);
+                //            break;
+                //    }
 
-				//    // Replace the contents
-				//    return Replacer_ConditionItem_AppliesToTable(dbReplacer.ContentText, table);
+                //    if (dbReplacer == null)
+                //        return "";
 
-				case PatternConditionKeyMode.TableForeignKey:
+                //    // Replace the contents
+                //    return Replacer_ConditionItem_AppliesToTable(dbReplacer.ContentText, table);
 
-					var normalKeyReplacer = partialContent.GetFirst();
+                case PatternConditionKeyMode.TableForeignKey:
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToForeignKeys(normalKeyReplacer.ContentText, table);
+                    var normalKeyReplacer = partialContent.GetFirst();
 
-				case PatternConditionKeyMode.TableIndexConstraint:
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToForeignKeys(normalKeyReplacer.ContentText, table);
 
-					var indexConstraintReplacer = partialContent.GetFirst();
+                case PatternConditionKeyMode.TableIndexConstraint:
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToIndexConstraints(indexConstraintReplacer.ContentText, table, false);
+                    var indexConstraintReplacer = partialContent.GetFirst();
 
-				case PatternConditionKeyMode.TableUniqueConstraint:
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToIndexConstraints(indexConstraintReplacer.ContentText, table, false);
 
-					var uniqueConstraintReplacer = partialContent.GetFirst();
+                case PatternConditionKeyMode.TableUniqueConstraint:
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToIndexConstraints(uniqueConstraintReplacer.ContentText, table, true);
+                    var uniqueConstraintReplacer = partialContent.GetFirst();
 
-				case PatternConditionKeyMode.TablePrimaryKey:
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToIndexConstraints(uniqueConstraintReplacer.ContentText, table, true);
 
-					ConditionItem primaryReplacer;
+                case PatternConditionKeyMode.TablePrimaryKey:
 
-					if (table.ReadOnly)
-					{
-						// Table is marked as read only, like views
-						primaryReplacer = partialContent.GetReplacement(
-							ConditionKeyModeConsts.TablePrimaryKey.ReadOnlyTable);
-					}
-					else if (table.HasPrimaryKey())
-					{
-						// Table has a primary key
-						primaryReplacer = partialContent.GetReplacement(
-							ConditionKeyModeConsts.TablePrimaryKey.WithPrimaryKey);
-					}
-					else
-					{
-						// There is no primary key, default
-						primaryReplacer = partialContent.GetReplacement(
-							ConditionKeyModeConsts.TablePrimaryKey.NoPrimaryKey);
-					}
+                    ConditionItem primaryReplacer;
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToTable(primaryReplacer.ContentText, table);
+                    if (table.ReadOnly) {
+                        // Table is marked as read only, like views
+                        primaryReplacer = partialContent.GetReplacement(
+                            ConditionKeyModeConsts.TablePrimaryKey.ReadOnlyTable);
+                    }
+                    else if (table.HasPrimaryKey()) {
+                        // Table has a primary key
+                        primaryReplacer = partialContent.GetReplacement(
+                            ConditionKeyModeConsts.TablePrimaryKey.WithPrimaryKey);
+                    }
+                    else {
+                        // There is no primary key, default
+                        primaryReplacer = partialContent.GetReplacement(
+                            ConditionKeyModeConsts.TablePrimaryKey.NoPrimaryKey);
+                    }
 
-				case PatternConditionKeyMode.TableAutoIncrement:
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToTable(primaryReplacer.ContentText, table);
 
-					int autoCount = table.GetAutoIncrementCount();
-					ConditionItem autoReplacer;
+                case PatternConditionKeyMode.TableAutoIncrement:
 
-					if (autoCount == 0)
-					{
-						autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.NoAutoIncrement);
-					}
-					else if (autoCount == 1)
-					{
-						autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.OneAutoIncrement);
-					}
-					else
-					{
-						autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.MoreAutoIncrement);
-					}
+                    int autoCount = table.GetAutoIncrementCount();
+                    ConditionItem autoReplacer;
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToTable(autoReplacer.ContentText, table);
+                    if (autoCount == 0) {
+                        autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.NoAutoIncrement);
+                    }
+                    else if (autoCount == 1) {
+                        autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.OneAutoIncrement);
+                    }
+                    else {
+                        autoReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.TableAutoIncrement.MoreAutoIncrement);
+                    }
 
-				default:
-					// Ignored
-					return "";
-			}
-		}
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToTable(autoReplacer.ContentText, table);
 
-		/// <summary>
-		/// Partial content replacer.
-		/// </summary>
-		string ConditionItem_AppliesToColumn(PatternContent partialContent, DbTable table, DbColumn column)
-		{
-			switch (partialContent.ConditionKeyMode)
-			{
+                default:
+                    // Ignored
+                    return "";
+            }
+        }
+
+        /// <summary>
+        /// Partial content replacer.
+        /// </summary>
+        private string ConditionItem_AppliesToColumn(PatternContent partialContent, DbTable table, DbColumn column)
+        {
+            switch (partialContent.ConditionKeyMode) {
                 //case PatternConditionKeyMode.DatabaseProvider:
                 //    ConditionItem dbReplacer = null;
 
@@ -1494,122 +1400,115 @@ namespace SalarDbCodeGenerator.GeneratorEngine
                 //        return "";
 
                 //    // Replace the contents
-                //    return Replacer_ConditionItem_AppliesToColumn(dbReplacer.Content, table, column);		
+                //    return Replacer_ConditionItem_AppliesToColumn(dbReplacer.Content, table, column);
                 case PatternConditionKeyMode.FieldsAll:
-				case PatternConditionKeyMode.Field:
-					var replacer = partialContent.GetFirst();
+                case PatternConditionKeyMode.Field:
+                    var replacer = partialContent.GetFirst();
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToColumn(replacer.ContentText, table, column);
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToColumn(replacer.ContentText, table, column);
 
-				case PatternConditionKeyMode.FieldsCondensedTypeAll:
-				case PatternConditionKeyMode.FieldCondensedType:
-					ConditionItem replacerCondensedType = null;
+                case PatternConditionKeyMode.FieldsCondensedTypeAll:
+                case PatternConditionKeyMode.FieldCondensedType:
+                    ConditionItem replacerCondensedType = null;
 
-					switch (column.DataCondensedType)
-					{
-						case DbColumn.ColumnCondensedType.None:
-							replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.None);
-							break;
+                    switch (column.DataCondensedType) {
+                        case DbColumn.ColumnCondensedType.None:
+                            replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.None);
+                            break;
 
-						case DbColumn.ColumnCondensedType.String:
-							replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.String);
-							break;
+                        case DbColumn.ColumnCondensedType.String:
+                            replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.String);
+                            break;
 
-						case DbColumn.ColumnCondensedType.Decimal:
-							replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.Decimal);
-							break;
+                        case DbColumn.ColumnCondensedType.Decimal:
+                            replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.Decimal);
+                            break;
 
-						case DbColumn.ColumnCondensedType.Integer:
-							replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.Integer);
-							break;
-					}
+                        case DbColumn.ColumnCondensedType.Integer:
+                            replacerCondensedType = partialContent.GetReplacement(ConditionKeyModeConsts.FieldCondensedType.Integer);
+                            break;
+                    }
 
-					// Replace the contents
-					if (replacerCondensedType != null)
-						return Replacer_ConditionItem_AppliesToColumn(replacerCondensedType.ContentText, table, column);
-					return string.Empty;
+                    // Replace the contents
+                    if (replacerCondensedType != null)
+                        return Replacer_ConditionItem_AppliesToColumn(replacerCondensedType.ContentText, table, column);
+                    return string.Empty;
 
-				case PatternConditionKeyMode.FieldsPrimaryKeyAll:
-				case PatternConditionKeyMode.FieldPrimaryKey:
-					ConditionItem primaryReplacer;
+                case PatternConditionKeyMode.FieldsPrimaryKeyAll:
+                case PatternConditionKeyMode.FieldPrimaryKey:
+                    ConditionItem primaryReplacer;
 
-					if (column.PrimaryKey)
-						primaryReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldPrimaryKey.PrimaryKey);
-					else
-						primaryReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldPrimaryKey.NormalField);
+                    if (column.PrimaryKey)
+                        primaryReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldPrimaryKey.PrimaryKey);
+                    else
+                        primaryReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldPrimaryKey.NormalField);
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToColumn(primaryReplacer.ContentText, table, column);
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToColumn(primaryReplacer.ContentText, table, column);
 
-				case PatternConditionKeyMode.FieldReferencedKeyType:
-				case PatternConditionKeyMode.FieldKeyType:
-				case PatternConditionKeyMode.FieldsReferencedKeyTypeAll:
-				case PatternConditionKeyMode.FieldsKeyTypeAll:
+                case PatternConditionKeyMode.FieldReferencedKeyType:
+                case PatternConditionKeyMode.FieldKeyType:
+                case PatternConditionKeyMode.FieldsReferencedKeyTypeAll:
+                case PatternConditionKeyMode.FieldsKeyTypeAll:
 
-					// Get field type
-					ConditionItem keyTypeReplacer = Condition_GetReplacement_FieldKeyType(partialContent, table, column);
+                    // Get field type
+                    ConditionItem keyTypeReplacer = Condition_GetReplacement_FieldKeyType(partialContent, table, column);
 
-					// the rplacer is not defined
-					if (keyTypeReplacer == null)
-						return string.Empty;
+                    // the rplacer is not defined
+                    if (keyTypeReplacer == null)
+                        return string.Empty;
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToColumn(keyTypeReplacer.ContentText, table, column);
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToColumn(keyTypeReplacer.ContentText, table, column);
 
+                case PatternConditionKeyMode.FieldsKeyReadTypeAll:
+                case PatternConditionKeyMode.FieldKeyReadType:
+                    ConditionItem keyRead;
 
-				case PatternConditionKeyMode.FieldsKeyReadTypeAll:
-				case PatternConditionKeyMode.FieldKeyReadType:
-					ConditionItem keyRead;
+                    bool canConvert = !column.ExplicitCastDataType; // TODO
 
-					bool canConvert = !column.ExplicitCastDataType; // TODO
+                    // how to read key type
 
-					// how to read key type
+                    if (!column.AllowNull && canConvert) {
+                        keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.NormalField_Convert);
+                    }
+                    else if (!column.AllowNull && !canConvert) {
+                        keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.NormalField_Cast);
+                    }
+                    else if (column.AllowNull && canConvert) {
+                        keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.Nullable_Convert);
+                    }
+                    else {
+                        keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.Nullable_Cast);
+                    }
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToColumn(keyRead.ContentText, table, column);
 
-					if (!column.AllowNull && canConvert)
-					{
-						keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.NormalField_Convert);
-					}
-					else if (!column.AllowNull && !canConvert)
-					{
-						keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.NormalField_Cast);
-					}
-					else if (column.AllowNull && canConvert)
-					{
-						keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.Nullable_Convert);
-					}
-					else
-					{
-						keyRead = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyReadType.Nullable_Cast);
-					}
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToColumn(keyRead.ContentText, table, column);
+                default:
+                    // Ignored
+                    return "";
+            }
+        }
 
-				default:
-					// Ignored
-					return "";
-			}
-		}
+        /// <summary>
+        /// Gets replacement for FieldsKeyTypeAll.
+        /// Used by FieldForeignKey too.
+        /// </summary>
+        private ConditionItem Condition_GetReplacement_FieldKeyType(PatternContent partialContent, DbTable table, DbColumn column)
+        {
+            ConditionItem keyTypeReplacer;
 
-		/// <summary>
-		/// Gets replacement for FieldsKeyTypeAll.
-		/// Used by FieldForeignKey too.
-		/// </summary>
-		private ConditionItem Condition_GetReplacement_FieldKeyType(PatternContent partialContent, DbTable table, DbColumn column)
-		{
-			ConditionItem keyTypeReplacer;
+            // this key is not reference type
+            if (_patternProject.SeperateReferenceColumns) {
+                if (column.IsReferenceKey && partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldsKeyTypeAll)
+                    return null;
+                if (!column.IsReferenceKey && partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldsReferencedKeyTypeAll)
+                    return null;
+            }
 
-			// this key is not reference type
-			if (_patternProject.SeperateReferenceColumns)
-			{
-				if (column.IsReferenceKey && partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldsKeyTypeAll)
-					return null;
-				if (!column.IsReferenceKey && partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldsReferencedKeyTypeAll)
-					return null;
-			}
-
-			// Key type
-			bool dataTypeNotNullable = !column.DataTypeNullable;
+            // Key type
+            bool dataTypeNotNullable = !column.DataTypeNullable;
 
             // Search for a name match replacement first
             foreach (var repItem in partialContent.Conditions) {
@@ -1620,274 +1519,257 @@ namespace SalarDbCodeGenerator.GeneratorEngine
 
             // Back to your normally scheduled replacements
             if (column.PrimaryKey && column.AutoIncrement && table.HasOneToOneRelation()) {
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.OneToOnePrimaryKey);
-			}
-			else if (column.PrimaryKey && table.HasOneToOneRelation())
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.OneToOneForeignKey);
-			}
-			else if (column.AutoIncrement && column.PrimaryKey)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncrementPrimaryKey);
-			}
-			else if (column.AutoIncrement && column.AllowNull && !dataTypeNotNullable)
-			{
-				// AutoIncrement
-				// Nullable column
-				// Nullable object
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncNativeNullable);
-			}
-			else if (column.AutoIncrement && column.AllowNull && dataTypeNotNullable)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncNullableType);
-			}
-			else if (column.AutoIncrement)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncrement);
-			}
-			else if (column.PrimaryKey)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.PrimaryKey);
-			}
-			else if (column.AllowNull && !dataTypeNotNullable)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NativeNullable);
-			}
-			else if (column.AllowNull && dataTypeNotNullable)
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NullableType);
-			}
-			else
-			{
-				keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NormalField);
-			}
-			return keyTypeReplacer;
-		}
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.OneToOnePrimaryKey);
+            }
+            else if (column.PrimaryKey && table.HasOneToOneRelation()) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.OneToOneForeignKey);
+            }
+            else if (column.AutoIncrement && column.PrimaryKey) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncrementPrimaryKey);
+            }
+            else if (column.AutoIncrement && column.AllowNull && !dataTypeNotNullable) {
+                // AutoIncrement
+                // Nullable column
+                // Nullable object
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncNativeNullable);
+            }
+            else if (column.AutoIncrement && column.AllowNull && dataTypeNotNullable) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncNullableType);
+            }
+            else if (column.AutoIncrement) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.AutoIncrement);
+            }
+            else if (column.PrimaryKey) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.PrimaryKey);
+            }
+            else if (column.AllowNull && !dataTypeNotNullable) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NativeNullable);
+            }
+            else if (column.AllowNull && dataTypeNotNullable) {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NullableType);
+            }
+            else {
+                keyTypeReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldKeyType.NormalField);
+            }
+            return keyTypeReplacer;
+        }
 
-		/// <summary>
-		/// Partial content replacer.
-		/// </summary>
-		string ConditionItem_AppliesToForeignKeyColumns(PatternContent partialContent, DbTable table, DbForeignKey foreignKey)
-		{
-			switch (partialContent.ConditionKeyMode)
-			{
-				case PatternConditionKeyMode.FieldForeignKeyForeignColumn:
-				case PatternConditionKeyMode.FieldForeignKeyLocalColumn:
-					DbColumn field = null;
-					if (partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldForeignKeyLocalColumn)
-					{
-						field = foreignKey.LocalColumn;
-					}
-					else if (partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldForeignKeyForeignColumn)
-					{
-						field = foreignKey.ForeignColumn;
-					}
+        /// <summary>
+        /// Partial content replacer.
+        /// </summary>
+        private string ConditionItem_AppliesToForeignKeyColumns(PatternContent partialContent, DbTable table, DbForeignKey foreignKey)
+        {
+            switch (partialContent.ConditionKeyMode) {
+                case PatternConditionKeyMode.FieldForeignKeyForeignColumn:
+                case PatternConditionKeyMode.FieldForeignKeyLocalColumn:
+                    DbColumn field = null;
+                    if (partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldForeignKeyLocalColumn) {
+                        field = foreignKey.LocalColumn;
+                    }
+                    else if (partialContent.ConditionKeyMode == PatternConditionKeyMode.FieldForeignKeyForeignColumn) {
+                        field = foreignKey.ForeignColumn;
+                    }
 
-					if (field == null) return "";
+                    if (field == null) return "";
 
-					// Get field type
-					var keyTypeReplacer = Condition_GetReplacement_FieldKeyType(partialContent, table, field);
+                    // Get field type
+                    var keyTypeReplacer = Condition_GetReplacement_FieldKeyType(partialContent, table, field);
 
-					// the rplacer is not defined
-					if (keyTypeReplacer == null)
-						return string.Empty;
+                    // the rplacer is not defined
+                    if (keyTypeReplacer == null)
+                        return string.Empty;
 
-					var content = Replacer_ConditionItem_AppliesToForeignKey(keyTypeReplacer.ContentText, table, foreignKey);
-					// Replace the contents
-					content = Replacer_ConditionItem_AppliesToColumn(content, table, field);
-					return content;
+                    var content = Replacer_ConditionItem_AppliesToForeignKey(keyTypeReplacer.ContentText, table, foreignKey);
+                    // Replace the contents
+                    content = Replacer_ConditionItem_AppliesToColumn(content, table, field);
+                    return content;
 
+                case PatternConditionKeyMode.FieldsForeignKeyAll:
+                    ConditionItem theReplacer;
 
-				case PatternConditionKeyMode.FieldsForeignKeyAll:
-					ConditionItem theReplacer;
+                    switch (foreignKey.Multiplicity) {
+                        case DbForeignKey.ForeignKeyMultiplicity.OneToMany:
+                            theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOne);
+                            break;
 
-					switch (foreignKey.Multiplicity)
-					{
-						case DbForeignKey.ForeignKeyMultiplicity.OneToMany:
-							theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOne);
-							break;
-						case DbForeignKey.ForeignKeyMultiplicity.ManyToOne:
-							theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityMany);
-							break;
+                        case DbForeignKey.ForeignKeyMultiplicity.ManyToOne:
+                            theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityMany);
+                            break;
 
-						case DbForeignKey.ForeignKeyMultiplicity.OneToOne:
-							var foreignKeyColumn = table.GetOneToOneRelation();
-							if (foreignKeyColumn == null || foreignKeyColumn.LocalColumn == null)
-								return string.Empty;
-							var localColumn = foreignKeyColumn.LocalColumn;
-							if (localColumn.AutoIncrement)
-							{
-								theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOneToOnePrimary);
-							}
-							else
-							{
-								theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOneToOneForeign);
-							}
-							break;
+                        case DbForeignKey.ForeignKeyMultiplicity.OneToOne:
+                            var foreignKeyColumn = table.GetOneToOneRelation();
+                            if (foreignKeyColumn == null || foreignKeyColumn.LocalColumn == null)
+                                return string.Empty;
+                            var localColumn = foreignKeyColumn.LocalColumn;
+                            if (localColumn.AutoIncrement) {
+                                theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOneToOnePrimary);
+                            }
+                            else {
+                                theReplacer = partialContent.GetReplacement(ConditionKeyModeConsts.FieldForeignKey.MultiplicityOneToOneForeign);
+                            }
+                            break;
 
-						default:
-							// not defined Multiplicity
-							return string.Empty;
-					}
+                        default:
+                            // not defined Multiplicity
+                            return string.Empty;
+                    }
 
-					// not defined replacer
-					if (theReplacer == null)
-						return string.Empty;
+                    // not defined replacer
+                    if (theReplacer == null)
+                        return string.Empty;
 
-					// Replace the contents
-					return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
+                    // Replace the contents
+                    return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
 
-				case PatternConditionKeyMode.ForeignKeyUpdateAction:
-					theReplacer = partialContent.GetReplacement(foreignKey.UpdateAction.ToString());
-					if (theReplacer == null)
-						return string.Empty;
-					return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
+                case PatternConditionKeyMode.ForeignKeyUpdateAction:
+                    theReplacer = partialContent.GetReplacement(foreignKey.UpdateAction.ToString());
+                    if (theReplacer == null)
+                        return string.Empty;
+                    return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
 
-				case PatternConditionKeyMode.ForeignKeyDeleteAction:
-					theReplacer = partialContent.GetReplacement(foreignKey.DeleteAction.ToString());
-					if (theReplacer == null)
-						return string.Empty;
-					return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
+                case PatternConditionKeyMode.ForeignKeyDeleteAction:
+                    theReplacer = partialContent.GetReplacement(foreignKey.DeleteAction.ToString());
+                    if (theReplacer == null)
+                        return string.Empty;
+                    return Replacer_ConditionItem_AppliesToForeignKey(theReplacer.ContentText, table, foreignKey);
 
-				default:
-					// Ignored
-					return string.Empty;
-			}
-		}
+                default:
+                    // Ignored
+                    return string.Empty;
+            }
+        }
 
-		#endregion
+        #endregion ConditionItem_AppliesTo
 
-		#region Replacers
-		private string Replacer_PatternBaseContent(string baseContent, string tableNameSchema, string tableNameDb)
-		{
-			// Replacements
-			if (tableNameSchema != null)
-				baseContent = Common.ReplaceEx(baseContent, ReplaceConsts.TableName, tableNameSchema, StringComparison.CurrentCultureIgnoreCase);
-			if (tableNameDb != null)
-				baseContent = Common.ReplaceEx(baseContent, ReplaceConsts.TableNameDb, tableNameDb, StringComparison.CurrentCultureIgnoreCase);
+        #region Replacers
 
-			// general
-			baseContent = Replacer_GeneratorGeneral(baseContent);
+        private string Replacer_PatternBaseContent(string baseContent, string tableNameSchema, string tableNameDb)
+        {
+            // Replacements
+            if (tableNameSchema != null)
+                baseContent = Common.ReplaceEx(baseContent, ReplaceConsts.TableName, tableNameSchema, StringComparison.CurrentCultureIgnoreCase);
+            if (tableNameDb != null)
+                baseContent = Common.ReplaceEx(baseContent, ReplaceConsts.TableNameDb, tableNameDb, StringComparison.CurrentCultureIgnoreCase);
 
-			// database provider
-			baseContent = Replacer_DatabaseProvider(baseContent);
+            // general
+            baseContent = Replacer_GeneratorGeneral(baseContent);
 
-			return baseContent;
-		}
+            // database provider
+            baseContent = Replacer_DatabaseProvider(baseContent);
 
-		private string Replacer_GeneratorGeneral(string content)
-		{
-			content = Common.ReplaceEx(content, ReplaceConsts.Namespace, _projectDef.CodeGenSettings.DefaultNamespace, StringComparison.CurrentCultureIgnoreCase);
-			content = Common.ReplaceEx(content, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.DatabaseName, _databaseName);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.Generator, AppConfig.AppGeneratorSign);
-			content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.OperateDate, DateTime.Now.ToString());
-			content = Common.ReplaceEx(content, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
-			content = Common.ReplaceEx(content, ReplaceConsts.ConnectionStringPwd, _projectDef.DbSettions.SqlPassword, StringComparison.CurrentCultureIgnoreCase);
-			content = Common.ReplaceEx(content, ReplaceConsts.ConnectionStringUser, _projectDef.DbSettions.SqlUsername, StringComparison.CurrentCultureIgnoreCase);
-			return content;
-		}
+            return baseContent;
+        }
 
-		/// <summary>
-		/// Replaces the database provider class name
-		/// </summary>
-		private string Replacer_DatabaseProvider(string content)
-		{
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderSpParamPrefix,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.StoredProcParamPrefix));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassCommand,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassCommand));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassConnection,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassConnection));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassDataAdapter,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassDataAdapter));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassDataReader,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassDataReader));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassParameter,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassParameter));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassPrefix,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassPrefix));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassTransaction,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassTransaction));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderClassReferenceName,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassNamespace));
-			content = Common.ReplaceExIgnoreCase(content,
-						  ReplaceConsts.ProviderAssemblyReference,
-						  _schemaEngine.GetDataProviderClassName(DataProviderClassNames.AssemblyReference));
+        private string Replacer_GeneratorGeneral(string content)
+        {
+            content = Common.ReplaceEx(content, ReplaceConsts.Namespace, _projectDef.CodeGenSettings.DefaultNamespace, StringComparison.CurrentCultureIgnoreCase);
+            content = Common.ReplaceEx(content, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.DatabaseName, _databaseName);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.Generator, AppConfig.AppGeneratorSign);
+            content = Common.ReplaceExIgnoreCase(content, ReplaceConsts.OperateDate, DateTime.Now.ToString());
+            content = Common.ReplaceEx(content, ReplaceConsts.ConnectionString, _projectDef.DbSettions.GetConnectionString(), StringComparison.CurrentCultureIgnoreCase);
+            content = Common.ReplaceEx(content, ReplaceConsts.ConnectionStringPwd, _projectDef.DbSettions.SqlPassword, StringComparison.CurrentCultureIgnoreCase);
+            content = Common.ReplaceEx(content, ReplaceConsts.ConnectionStringUser, _projectDef.DbSettions.SqlUsername, StringComparison.CurrentCultureIgnoreCase);
+            return content;
+        }
 
-			return content;
-		}
+        /// <summary>
+        /// Replaces the database provider class name
+        /// </summary>
+        private string Replacer_DatabaseProvider(string content)
+        {
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderSpParamPrefix,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.StoredProcParamPrefix));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassCommand,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassCommand));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassConnection,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassConnection));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassDataAdapter,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassDataAdapter));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassDataReader,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassDataReader));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassParameter,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassParameter));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassPrefix,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassPrefix));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassTransaction,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassTransaction));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderClassReferenceName,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.ClassNamespace));
+            content = Common.ReplaceExIgnoreCase(content,
+                          ReplaceConsts.ProviderAssemblyReference,
+                          _schemaEngine.GetDataProviderClassName(DataProviderClassNames.AssemblyReference));
 
-		private string Replacer_PatternFileName(string fileName, string tableSchemaName, string tableNameDb, string tableNameSchemaCS)
-		{
-			fileName = Common.ReplaceEx(fileName, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
-			fileName = Common.ReplaceEx(fileName, ReplaceConsts.Namespace, _projectDef.CodeGenSettings.DefaultNamespace, StringComparison.CurrentCultureIgnoreCase);
-			fileName = Common.ReplaceExIgnoreCase(fileName, ReplaceConsts.DatabaseName, _databaseName);
+            return content;
+        }
 
-			if (tableSchemaName != null)
-				fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableName, tableSchemaName, StringComparison.CurrentCultureIgnoreCase);
-			if (tableNameDb != null)
-				fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableNameDb, tableNameDb, StringComparison.CurrentCultureIgnoreCase);
-			if (tableNameSchemaCS != null)
-				fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableNameSchemaCS, tableNameSchemaCS, StringComparison.CurrentCultureIgnoreCase);
-			return fileName;
-		}
+        private string Replacer_PatternFileName(string fileName, string tableSchemaName, string tableNameDb, string tableNameSchemaCS)
+        {
+            fileName = Common.ReplaceEx(fileName, ReplaceConsts.ProjectName, _projectDef.ProjectName, StringComparison.CurrentCultureIgnoreCase);
+            fileName = Common.ReplaceEx(fileName, ReplaceConsts.Namespace, _projectDef.CodeGenSettings.DefaultNamespace, StringComparison.CurrentCultureIgnoreCase);
+            fileName = Common.ReplaceExIgnoreCase(fileName, ReplaceConsts.DatabaseName, _databaseName);
 
+            if (tableSchemaName != null)
+                fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableName, tableSchemaName, StringComparison.CurrentCultureIgnoreCase);
+            if (tableNameDb != null)
+                fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableNameDb, tableNameDb, StringComparison.CurrentCultureIgnoreCase);
+            if (tableNameSchemaCS != null)
+                fileName = Common.ReplaceEx(fileName, ReplaceConsts.TableNameSchemaCS, tableNameSchemaCS, StringComparison.CurrentCultureIgnoreCase);
+            return fileName;
+        }
 
-		/// <summary>
-		/// Get field size
-		/// </summary>
-		private string FieldType_ColumnDataSize(DbColumn column)
-		{
-			if (column.Length > 0)
-				return column.Length.ToString();
-			if (column.DataTypeMaxLength > 0)
-				return column.DataTypeMaxLength.ToString();
-			return "0";
-		}
+        /// <summary>
+        /// Get field size
+        /// </summary>
+        private string FieldType_ColumnDataSize(DbColumn column)
+        {
+            if (column.Length > 0)
+                return column.Length.ToString();
+            if (column.DataTypeMaxLength > 0)
+                return column.DataTypeMaxLength.ToString();
+            return "0";
+        }
 
-		private string TableOwnerNameAsPrefix(DbTable table)
-		{
-			if (string.IsNullOrEmpty(table.OwnerName))
-				return "";
-			return table.OwnerName + ".";
-		}
+        private string TableOwnerNameAsPrefix(DbTable table)
+        {
+            if (string.IsNullOrEmpty(table.OwnerName))
+                return "";
+            return table.OwnerName + ".";
+        }
 
-		/// <summary>
-		/// Get field type database full name
-		/// </summary>
-		private string FieldType_ColumnDataTypeSize(DbColumn column)
-		{
-			string cleanType = (column.DataTypeDotNet);
+        /// <summary>
+        /// Get field type database full name
+        /// </summary>
+        private string FieldType_ColumnDataTypeSize(DbColumn column)
+        {
+            string cleanType = (column.DataTypeDotNet);
 
-			if (cleanType == "String" &&
-				column.DataTypeDb.ToLower().IndexOf(_patternProject.LanguageSettings.TextFieldIdenticator) == -1)
-				return column.DataTypeDb + "(" + column.Length + ")";
+            if (cleanType == "String" &&
+                column.DataTypeDb.ToLower().IndexOf(_patternProject.LanguageSettings.TextFieldIdenticator) == -1)
+                return column.DataTypeDb + "(" + column.Length + ")";
 
-			if (column.DataTypeDb.ToLower() == _patternProject.LanguageSettings.DbDecimalName.ToLower())
-			{
-				return _patternProject.LanguageSettings.DbDecimalType
-					.Replace(ReplaceConsts.Pattern_LanguageSettings_Precision, column.NumericPrecision.ToString())
-					.Replace(ReplaceConsts.Pattern_LanguageSettings_Scale, column.NumericScale.ToString());
-			}
-			else if (column.DataTypeDb.ToLower() == _patternProject.LanguageSettings.DbNumericName.ToLower())
-			{
-				return _patternProject.LanguageSettings.DbNumericType
-					.Replace(ReplaceConsts.Pattern_LanguageSettings_Precision, column.NumericPrecision.ToString())
-					.Replace(ReplaceConsts.Pattern_LanguageSettings_Scale, column.NumericScale.ToString());
-			}
-			return column.DataTypeDb;
-		}
-		#endregion
+            if (column.DataTypeDb.ToLower() == _patternProject.LanguageSettings.DbDecimalName.ToLower()) {
+                return _patternProject.LanguageSettings.DbDecimalType
+                    .Replace(ReplaceConsts.Pattern_LanguageSettings_Precision, column.NumericPrecision.ToString())
+                    .Replace(ReplaceConsts.Pattern_LanguageSettings_Scale, column.NumericScale.ToString());
+            }
+            else if (column.DataTypeDb.ToLower() == _patternProject.LanguageSettings.DbNumericName.ToLower()) {
+                return _patternProject.LanguageSettings.DbNumericType
+                    .Replace(ReplaceConsts.Pattern_LanguageSettings_Precision, column.NumericPrecision.ToString())
+                    .Replace(ReplaceConsts.Pattern_LanguageSettings_Scale, column.NumericScale.ToString());
+            }
+            return column.DataTypeDb;
+        }
 
-	}
+        #endregion Replacers
+    }
 }
