@@ -26,14 +26,14 @@ namespace SalarDbCodeGenerator.GeneratorEngine
 
 		#region local variables
 		PatternProject _patternProject;
-		ProjectDefinaton _projectDef;
+		ProjectDefinition _projectDef;
 		DbDatabase _database;
 		ExSchemaEngine _schemaEngine;
 		bool _optionGenerateUnselectedForeigns;
 		private string _databaseName;
 		#endregion
 
-		public Generator(ProjectDefinaton project, PatternProject pattern, DbDatabase database, ExSchemaEngine schemaEngine)
+		public Generator(ProjectDefinition project, PatternProject pattern, DbDatabase database, ExSchemaEngine schemaEngine)
 		{
 			_patternProject = pattern;
 			_projectDef = project;

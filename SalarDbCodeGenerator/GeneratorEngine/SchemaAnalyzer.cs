@@ -19,11 +19,11 @@ namespace SalarDbCodeGenerator.GeneratorEngine
 	{
 		#region local variables
 		PatternProject _patternProject;
-		ProjectDefinaton _projectDef;
+		ProjectDefinition _projectDef;
 		DbDatabase _database;
 		#endregion
 
-		public SchemaAnalyzer(ProjectDefinaton project, PatternProject pattern, DbDatabase database)
+		public SchemaAnalyzer(ProjectDefinition project, PatternProject pattern, DbDatabase database)
 		{
 			_patternProject = pattern;
 			_projectDef = project;

@@ -45,14 +45,14 @@ namespace SalarDbCodeGenerator.Presentation
 
 
 		public FormEditMode EditMode { get; set; }
-		public ProjectDefinaton ProjectInstance { get; set; }
+		public ProjectDefinition ProjectInstance { get; set; }
 
 		private void InitializeProjectModel()
 		{
 			if (ProjectInstance == null)
 			{
 				// load default settings
-				ProjectInstance = ProjectDefinaton.LoadDefaultProject();
+				ProjectInstance = ProjectDefinition.LoadDefaultProject();
 			}
 
 			ProjectInstance.ProjectName = txtProjectName.Text;

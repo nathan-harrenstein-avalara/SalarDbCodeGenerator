@@ -13,7 +13,7 @@ using System.Xml.Serialization;
 namespace SalarDbCodeGenerator.DbProject
 {
 	[Serializable]
-	public class ProjectDefinaton : ICloneable
+	public class ProjectDefinition : ICloneable
 	{
 		#region local variables
 		#endregion
@@ -42,7 +42,7 @@ namespace SalarDbCodeGenerator.DbProject
 		#endregion
 
 		#region public methods
-		public ProjectDefinaton()
+		public ProjectDefinition()
 		{
 			ProjectName = "Project1";
 			LastGeneration = DateTime.MinValue;
@@ -58,7 +58,7 @@ namespace SalarDbCodeGenerator.DbProject
 			return this.MemberwiseClone();
 		}
 
-		public static void SaveToFile(ProjectDefinaton definaton, string fileName)
+		public static void SaveToFile(ProjectDefinition definaton, string fileName)
 		{
 			var genPath = definaton.GenerationPath;
 			var patPath = definaton.CodeGenSettings.CodeGenPatternFile;
@@ -70,7 +70,7 @@ namespace SalarDbCodeGenerator.DbProject
 				definaton.GenerationPath = Common.ProjectPathMakeRelative(definaton.GenerationPath, fileName);
 
 				// save
-				XmlSerializer saver = new XmlSerializer(typeof(ProjectDefinaton));
+				XmlSerializer saver = new XmlSerializer(typeof(ProjectDefinition));
 				using (StreamWriter writer = new StreamWriter(fileName))
 					saver.Serialize(writer, definaton);
 
@@ -82,19 +82,19 @@ namespace SalarDbCodeGenerator.DbProject
 				definaton.GenerationPath = genPath;
 			}
 		}
-		public static ProjectDefinaton LoadFromFile(string fileName)
+		public static ProjectDefinition LoadFromFile(string fileName)
 		{
-			ProjectDefinaton definaton;
-			XmlSerializer loader = new XmlSerializer(typeof(ProjectDefinaton));
+			ProjectDefinition definaton;
+			XmlSerializer loader = new XmlSerializer(typeof(ProjectDefinition));
 			using (StreamReader reader = new StreamReader(fileName))
-				definaton = (ProjectDefinaton)loader.Deserialize(reader);
+				definaton = (ProjectDefinition)loader.Deserialize(reader);
 
 			definaton.ProjectFileName = fileName;
 			return definaton;
 		}
-		public static ProjectDefinaton LoadDefaultProject()
+		public static ProjectDefinition LoadDefaultProject()
 		{
-			ProjectDefinaton result = new ProjectDefinaton();
+			ProjectDefinition result = new ProjectDefinition();
 
 			result.ProjectName = "Project1";
 			result.LastGeneration = DateTime.MinValue;

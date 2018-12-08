@@ -115,7 +115,7 @@ namespace SalarDbCodeGenerator
 		bool _currentProject_Modified = false;
 		bool _currentProject_Opened = false;
 		string _currentProject_Filename = "";
-		ProjectDefinaton _projectDefinaton;
+		ProjectDefinition _projectDefinaton;
 		PatternProject _patternProject;
 		RecentProjects _recentProjects;
 		List<PatternProject> _patternProjectsList = new List<PatternProject>();
@@ -136,7 +136,7 @@ namespace SalarDbCodeGenerator
 		#region private methods
 		void InitializeApplication()
 		{
-			_projectDefinaton = ProjectDefinaton.LoadDefaultProject();
+			_projectDefinaton = ProjectDefinition.LoadDefaultProject();
 			_patternProject = new PatternProject();
 			_recentProjects = new RecentProjects(mnuReopen, mnuReopenRecentFile_Click);
 			Reload_ProjectDefinaton();
@@ -672,7 +672,7 @@ namespace SalarDbCodeGenerator
 		{
 			using (var frm = new frmProjectDetails(frmProjectDetails.FormEditMode.Edit))
 			{
-				frm.ProjectInstance = (ProjectDefinaton)_projectDefinaton.Clone();
+				frm.ProjectInstance = (ProjectDefinition)_projectDefinaton.Clone();
 				if (frm.ShowDialog() == DialogResult.OK)
 				{
 					_projectDefinaton = frm.ProjectInstance;
@@ -686,7 +686,7 @@ namespace SalarDbCodeGenerator
 		{
 			using (var frmNew = new frmProjectDetails(frmProjectDetails.FormEditMode.New))
 			{
-				frmNew.ProjectInstance = ProjectDefinaton.LoadDefaultProject();
+				frmNew.ProjectInstance = ProjectDefinition.LoadDefaultProject();
 				if (frmNew.ShowDialog() == DialogResult.OK)
 				{
 					_projectDefinaton = frmNew.ProjectInstance;
@@ -716,7 +716,7 @@ namespace SalarDbCodeGenerator
 
 			try
 			{
-				ProjectDefinaton openProject = ProjectDefinaton.LoadFromFile(projectFile);
+				ProjectDefinition openProject = ProjectDefinition.LoadFromFile(projectFile);
 
 				// Load patterns first
 				try
@@ -773,7 +773,7 @@ namespace SalarDbCodeGenerator
 				if (dlgSaveProject.ShowDialog() == DialogResult.OK)
 				{
 					string saveProect = dlgSaveProject.FileName;
-					ProjectDefinaton.SaveToFile(_projectDefinaton, saveProect);
+					ProjectDefinition.SaveToFile(_projectDefinaton, saveProect);
 
 					_currentProject_Filename = saveProect;
 					_currentProject_Opened = true;
@@ -793,7 +793,7 @@ namespace SalarDbCodeGenerator
 			}
 			else
 			{
-				ProjectDefinaton.SaveToFile(_projectDefinaton, _currentProject_Filename);
+				ProjectDefinition.SaveToFile(_projectDefinaton, _currentProject_Filename);
 				SetModified(false);
 				return true;
 			}
@@ -805,7 +805,7 @@ namespace SalarDbCodeGenerator
 			if (dlgSaveProject.ShowDialog() == DialogResult.OK)
 			{
 				string saveProect = dlgSaveProject.FileName;
-				ProjectDefinaton.SaveToFile(_projectDefinaton, saveProect);
+				ProjectDefinition.SaveToFile(_projectDefinaton, saveProect);
 				_currentProject_Filename = saveProect;
 				_currentProject_Opened = true;
 
