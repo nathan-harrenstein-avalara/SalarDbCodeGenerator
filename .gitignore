@@ -12,3 +12,4 @@
 /_ReSharper.SalarDbCodeGenerator
 /!Releases
 packages/
+.vs
