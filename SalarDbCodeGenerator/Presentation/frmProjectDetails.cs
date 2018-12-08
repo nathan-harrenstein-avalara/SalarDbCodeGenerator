@@ -1,4 +1,5 @@
-﻿using Npgsql;
+﻿using MySql.Data.MySqlClient;
+using Npgsql;
 
 #if ORACLE
 using Oracle.ManagedDataAccess.Client;

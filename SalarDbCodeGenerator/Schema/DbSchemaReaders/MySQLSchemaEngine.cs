@@ -1,4 +1,5 @@
-﻿using SalarDbCodeGenerator.Schema.Database;
+﻿using MySql.Data.MySqlClient;
+using SalarDbCodeGenerator.Schema.Database;
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;

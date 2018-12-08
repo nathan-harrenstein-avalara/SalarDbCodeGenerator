@@ -1,4 +1,5 @@
-﻿using Npgsql;
+﻿using MySql.Data.MySqlClient;
+using Npgsql;
 
 //using Oracle.ManagedDataAccess.Client;
 using SalarDbCodeGenerator.Schema.DbSchemaReaders;
