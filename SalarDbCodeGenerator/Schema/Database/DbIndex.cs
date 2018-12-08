@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Collections.Generic;
 using System.Text;
 
 // ====================================
@@ -12,11 +10,11 @@ using System.Text;
 // ====================================
 namespace SalarDbCodeGenerator.Schema.Database
 {
-	/// <summary>
-	/// An index that can have one or many columns
-	/// </summary>
-	public class DbIndex
-	{
+    /// <summary>
+    /// An index that can have one or many columns
+    /// </summary>
+    public class DbIndex
+    {
         /// <summary>
         /// Name of Index
         /// </summary>
@@ -38,7 +36,7 @@ namespace SalarDbCodeGenerator.Schema.Database
         public bool IsUnique { get; set; }
 
         public override string ToString()
-		{
+        {
             StringBuilder sb = new StringBuilder(IndexName);
             sb.Append(": ");
             foreach (var key in Keys) {
@@ -49,14 +47,14 @@ namespace SalarDbCodeGenerator.Schema.Database
                 sb.Length -= 2;
             }
             return sb.ToString();
-		}
+        }
 
         private static List<string> _existingKeyNames = new List<string>();
         private string _indexKeyName = null;
+
         public string GetIndexKeyName()
         {
             if (_indexKeyName == null) {
-
                 // Construct friendly key name
                 StringBuilder sb = new StringBuilder();
                 foreach (var key in Keys) {
@@ -77,11 +75,11 @@ namespace SalarDbCodeGenerator.Schema.Database
             StringBuilder sb = new StringBuilder();
             bool first_column = true;
             foreach (var key in Keys) {
-
                 // First value is not nullable
                 if (first_column) {
                     sb.Append(key.KeyColumn.DataTypeDotNet);
-                } else {
+                }
+                else {
                     sb.Append(key.KeyColumn.DataTypeDotNet);
                     if (key.KeyColumn.DataTypeDotNet != "String") {
                         sb.Append("?");

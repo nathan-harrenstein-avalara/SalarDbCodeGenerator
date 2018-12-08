@@ -7,28 +7,27 @@
 // ====================================
 namespace SalarDbCodeGenerator.Schema.DbSchemaReaders
 {
-	public enum DatabaseProvider
-	{
-		SQLServer,
-		SqlCe4,
-		Oracle,
-		SQLite,
-		Npgsql,
-		MySql
-	}
+    public enum DatabaseProvider
+    {
+        SQLServer,
+        SqlCe4,
+        Oracle,
+        SQLite,
+        Npgsql,
+        MySql
+    }
 
-	public enum DataProviderClassNames
-	{
-		ClassPrefix,
-		ClassCommand,
-		ClassConnection,
-		ClassDataAdapter,
-		ClassDataReader,
-		ClassParameter,
-		ClassTransaction,
-		ClassNamespace,
-		AssemblyReference,
-		StoredProcParamPrefix
-	}
-
+    public enum DataProviderClassNames
+    {
+        ClassPrefix,
+        ClassCommand,
+        ClassConnection,
+        ClassDataAdapter,
+        ClassDataReader,
+        ClassParameter,
+        ClassTransaction,
+        ClassNamespace,
+        AssemblyReference,
+        StoredProcParamPrefix
+    }
 }

@@ -178,7 +178,7 @@
     <Compile Include="DbProject\ProjectCodeGenSettings.cs" />
     <Compile Include="DbProject\AppConfig.cs" />
     <Compile Include="DbProject\ProjectDbSettions.cs" />
-    <Compile Include="DbProject\ProjectDefinaton.cs" />
+    <Compile Include="DbProject\ProjectDefinition.cs" />
     <Compile Include="DbProject\ShellNotification.cs" />
     <Compile Include="frmCodeGen.cs">
       <SubType>Form</SubType>
@@ -750,7 +750,7 @@
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <ProjectExtensions>
     <VisualStudio>
-      <UserProperties BuildVersion_BuildVersioningStyle="None.None.YearStamp.MonthAndDayStamp" BuildVersion_UpdateAssemblyVersion="True" BuildVersion_UpdateFileVersion="True" />
+      <UserProperties BuildVersion_UpdateFileVersion="True" BuildVersion_UpdateAssemblyVersion="True" BuildVersion_BuildVersioningStyle="None.None.YearStamp.MonthAndDayStamp" />
     </VisualStudio>
   </ProjectExtensions>
   <PropertyGroup>

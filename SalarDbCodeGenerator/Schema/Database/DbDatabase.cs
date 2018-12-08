@@ -1,8 +1,5 @@
-﻿using System;
+﻿using SalarDbCodeGenerator.Schema.DbSchemaReaders;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using SalarDbCodeGenerator.Schema.DbSchemaReaders;
 
 // ====================================
 // SalarDbCodeGenerator
@@ -13,22 +10,26 @@ using SalarDbCodeGenerator.Schema.DbSchemaReaders;
 // ====================================
 namespace SalarDbCodeGenerator.Schema.Database
 {
-	public class DbDatabase
-	{
- 		#region properties
-		public string DatabaseName { get; set; }
-		public List<DbTable> SchemaTables { get; set; }
-		public List<DbView> SchemaViews { get; set; }
+    public class DbDatabase
+    {
+        #region properties
 
-		public DatabaseProvider Provider { get; set; }
- 		#endregion
+        public string DatabaseName { get; set; }
+        public List<DbTable> SchemaTables { get; set; }
+        public List<DbView> SchemaViews { get; set; }
 
-		#region public methods
-		public DbDatabase()
-		{
-			SchemaTables = new List<DbTable>();
-			SchemaViews = new List<DbView>();
-		}
-		#endregion
- 	}
+        public DatabaseProvider Provider { get; set; }
+
+        #endregion properties
+
+        #region public methods
+
+        public DbDatabase()
+        {
+            SchemaTables = new List<DbTable>();
+            SchemaViews = new List<DbView>();
+        }
+
+        #endregion public methods
+    }
 }

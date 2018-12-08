@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Collections.Generic;
 
 // ====================================
 // SalarDbCodeGenerator
@@ -12,19 +9,20 @@ using System.Text;
 // ====================================
 namespace SalarDbCodeGenerator.Schema.Database
 {
-	public class DbView : DbTable
-	{
-		public DbView(string viewName)
-			: base(viewName)
-		{
-			ReadOnly = true;
-			TableType = TableTypeInfo.View;
-		}
-		public DbView(string viewName, List<DbColumn> schemaColumns)
-			: base(viewName, schemaColumns)
-		{
-			ReadOnly = true;
-			TableType = TableTypeInfo.View;
-		}
-	}
+    public class DbView : DbTable
+    {
+        public DbView(string viewName)
+            : base(viewName)
+        {
+            ReadOnly = true;
+            TableType = TableTypeInfo.View;
+        }
+
+        public DbView(string viewName, List<DbColumn> schemaColumns)
+            : base(viewName, schemaColumns)
+        {
+            ReadOnly = true;
+            TableType = TableTypeInfo.View;
+        }
+    }
 }
