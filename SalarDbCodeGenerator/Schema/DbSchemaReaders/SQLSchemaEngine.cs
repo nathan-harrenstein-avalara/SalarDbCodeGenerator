@@ -611,7 +611,7 @@ SELECT i.index_id
   FROM sys.indexes i
 	   INNER JOIN sys.index_columns ic ON ic.object_id = i.object_id and ic.index_id = i.index_id
 	   INNER JOIN sys.columns c ON c.object_id = i.object_id AND c.column_id = ic.column_id
-       order by i.name;
+       order by i.name, ic.index_column_id;
 ";
 
             // Load from the database
